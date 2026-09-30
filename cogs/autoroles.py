@@ -4,10 +4,10 @@ from discord.ext import commands, tasks
 import datetime
 import json
 import os
-from typing import Optional, Literal, List
+from typing import Optional, Literal
 
 # ==============================================================================
-# 🌟 قاعدة البيانات الإمبراطورية المركزية والشاملة لجميع أنظمة الرولات
+# 🌟 قاعدة البيانات المركزية لأنظمة الرولات التلقائية
 # ==============================================================================
 MEGA_DB_FILE = "ziuo_mega_autoroles_enterprise_database.json"
 
@@ -26,7 +26,7 @@ def save_mega_db(data):
 
 
 # ==============================================================================
-# 🌟 واجهات التفاعل الإمبراطورية المتقدمة (أزرار + قوائم منسدلة)
+# 🌟 واجهات التفاعل الأزرار والقوائم المنسدلة للرولات الذاتية
 # ==============================================================================
 class EnterpriseMegaInteractiveView(discord.ui.View):
     def __init__(self, bot, guild_id, panel_data):
@@ -88,55 +88,18 @@ async def process_enterprise_role_action(interaction: discord.Interaction, role_
         return
 
     member = interaction.user
-    db = load_mega_db()
-    guild_id_str = str(guild.id)
-    
-    # جلب إعدادات السلوك والإشعارات من قاعدة البيانات
-    guild_settings = db.get(guild_id_str, {})
-    behavior = guild_settings.get("panel_behavior", "toggle") # toggle, add_only, remove_only
-    notifications_enabled = guild_settings.get("notifications_enabled", False)
-    assign_msg = guild_settings.get("assign_message", "تم إعطاؤك رول [Role] بنجاح!")
-    remove_msg = guild_settings.get("remove_message", "تم إزالة رول [Role] منك بنجاح.")
-
     has_role = role in member.roles
-    response_text = ""
 
-    # تطبيق السلوك المتقدم المأخوذ من لوحة التحكم الاحترافية
-    if behavior == "add_only":
-        if not has_role:
-            await member.add_roles(role)
-            response_text = assign_msg.replace("[Role]", role.mention)
-        else:
-            response_text = f"⚠️ **أنت تمتلك رول {role.mention} بالفعل ولا يمكن إضافته مرة أخرى!**"
-    elif behavior == "remove_only":
-        if has_role:
-            await member.remove_roles(role)
-            response_text = remove_msg.replace("[Role]", role.mention)
-        else:
-            response_text = f"⚠️ **أنت لا تمتلك رول {role.mention} أساساً لكي تقوم بإزالته!**"
-    else: # الوضع الافتراضي: تبديل (Toggle)
-        if has_role:
-            await member.remove_roles(role)
-            response_text = remove_msg.replace("[Role]", role.mention)
-        else:
-            await member.add_roles(role)
-            response_text = assign_msg.replace("[Role]", role.mention)
-
-    await interaction.response.send_message(response_text, ephemeral=True)
-
-    # إرسال إشعارات خاصة إذا كانت مفعلة
-    if notifications_enabled:
-        try:
-            if not has_role:
-                await member.send(f"🎉 **إشعار سيرفر {guild.name}:** {assign_msg.replace('[Role]', role.name)}")
-            else:
-                await member.send(f"🔔 **إشعار سيرفر {guild.name}:** {remove_msg.replace('[Role]', role.name)}")
-        except:
-            pass
+    if has_role:
+        await member.remove_roles(role)
+        await interaction.response.send_message(f"📤 **تم إزالة رول {role.mention} منك بنجاح.**", ephemeral=True)
+    else:
+        await member.add_roles(role)
+        await interaction.response.send_message(f"📥 **تم إعطاؤك رول {role.mention} بنجاح!**", ephemeral=True)
 
 
 # ==============================================================================
-# 🌟 الـ Cog العملاق والمطلق لإدارة كافة أنظمة الرولات الاحترافية
+# 🌟 الـ Cog المبسط والاحترافي لإدارة الرولات (أمران فقط لكل النظام)
 # ==============================================================================
 class ZiuoMegaAutoRolesEnterpriseCog(commands.Cog):
     def __init__(self, bot):
@@ -163,139 +126,113 @@ class ZiuoMegaAutoRolesEnterpriseCog(commands.Cog):
         save_mega_db(self.database)
 
     # --------------------------------------------------------------------------
-    # 1. نظام الرولات التلقائية (Auto Roles) للأعضاء والبوتات
+    # 1. الأمر الشامل المدمج للرولات التلقائية (Auto, Sticky, Delayed, Invite)
     # --------------------------------------------------------------------------
     @app_commands.command(
-        name="mega_ar_autoroles",
-        description="[الرولات التلقائية] تحديد رولات تلقائية فورية تُمنح للأعضاء الجدد أو البوتات عند انضمامهم"
+        name="autorole",
+        description="[نظام الرولات التلقائية] إدارة الرولات التلقائية، اللاصقة، المؤجلة، ودعوات السيرفر"
     )
     @app_commands.describe(
-        target_type="هل الرول مخصص للأعضاء العاديين (member) أم للبوتات (bot)",
-        role="الرول المراد إضافته أو إزالته من القائمة التلقائية"
+        action="اختر نوع النظام المراد ضبطه",
+        target_type="نوع العضو (للأعضاء الجدد أو للبوتات - يستخدم مع خيار autorole)",
+        role="الرول المراد إضافته أو تعديله",
+        status="حالة التفعيل (للصاق - True / False)",
+        minutes_delay="مدة التأخير بالدقائق (للـ Delayed)",
+        invite_code="كود دعوة السيرفر (للـ Invite)"
     )
     @app_commands.choices(
+        action=[
+            app_commands.Choice(name="رول تلقائي فوري (Auto-Role)", value="autorole"),
+            app_commands.Choice(name="رول لاصق عند العودة (Sticky-Role)", value="sticky"),
+            app_commands.Choice(name="رول مؤجل بعد فترة (Delayed-Role)", value="delayed"),
+            app_commands.Choice(name="رول برابط دعوة محدد (Invite-Role)", value="invite")
+        ],
         target_type=[
-            app_commands.Choice(name="رولات المستخدمين (Members)", value="member"),
-            app_commands.Choice(name="رولات البوتات (Bots)", value="bot")
+            app_commands.Choice(name="أعضاء (Members)", value="member"),
+            app_commands.Choice(name="بوتات (Bots)", value="bot")
         ]
     )
     @app_commands.checks.has_permissions(administrator=True)
-    async def mega_ar_autoroles(self, interaction: discord.Interaction, target_type: Literal["member", "bot"], role: discord.Role):
+    async def autorole_manager(
+        self,
+        interaction: discord.Interaction,
+        action: Literal["autorole", "sticky", "delayed", "invite"],
+        target_type: Optional[Literal["member", "bot"]] = "member",
+        role: Optional[discord.Role] = None,
+        status: Optional[bool] = None,
+        minutes_delay: Optional[int] = None,
+        invite_code: Optional[str] = None
+    ):
         guild_id = str(interaction.guild.id)
         if guild_id not in self.database:
             self.database[guild_id] = self._default_guild_structure()
 
-        if role.id not in self.database[guild_id]["auto_roles"][target_type]:
-            self.database[guild_id]["auto_roles"][target_type].append(role.id)
+        db_guild = self.database[guild_id]
+
+        if action == "autorole":
+            if not role:
+                await interaction.response.send_message("❌ **يجب تحديد الرول المطلوب!**", ephemeral=True)
+                return
+            if role.id not in db_guild["auto_roles"][target_type]:
+                db_guild["auto_roles"][target_type].append(role.id)
+                save_mega_db(self.database)
+                await interaction.response.send_message(f"✅ **تمت إضافة الرول {role.mention} لقائمة الرولات التلقائية لـ ({target_type}).**", ephemeral=True)
+            else:
+                db_guild["auto_roles"][target_type].remove(role.id)
+                save_mega_db(self.database)
+                await interaction.response.send_message(f"🗑️ **تم إزالة الرول {role.mention} من قائمة الرولات التلقائية.**", ephemeral=True)
+
+        elif action == "sticky":
+            if status is None:
+                await interaction.response.send_message("❌ **يجب تحديد حالة التفعيل (True أو False)!**", ephemeral=True)
+                return
+            db_guild["sticky"]["enabled"] = status
             save_mega_db(self.database)
-            await interaction.response.send_message(f"✅ **تمت إضافة الرول {role.mention} إلى قائمة الرولات التلقائية لـ ({target_type}) بنجاح.**", ephemeral=True)
-        else:
-            self.database[guild_id]["auto_roles"][target_type].remove(role.id)
+            await interaction.response.send_message(f"📌 **تم تحديث نظام الرولات اللاصقة إلى:** `{'مفعل ✅' if status else 'معطل ❌'}`", ephemeral=True)
+
+        elif action == "delayed":
+            if not role or minutes_delay is None:
+                await interaction.response.send_message("❌ **يجب تحديد الرول ومدة الدقائق المطلوبة!**", ephemeral=True)
+                return
+            db_guild["delayed"].append({"role_id": role.id, "delay_minutes": minutes_delay})
             save_mega_db(self.database)
-            await interaction.response.send_message(f"🗑️ **تم إزالة الرول {role.mention} من قائمة الرولات التلقائية لـ ({target_type}).**", ephemeral=True)
+            await interaction.response.send_message(f"⏳ **تمت إضافة قاعدة منح رول {role.mention} تلقائياً بعد {minutes_delay} دقيقة.**", ephemeral=True)
+
+        elif action == "invite":
+            if not role or not invite_code:
+                await interaction.response.send_message("❌ **يجب تحديد الرول وكود الدعوة!**", ephemeral=True)
+                return
+            db_guild["invites"].append({"code": invite_code.strip(), "role_id": role.id})
+            save_mega_db(self.database)
+            await interaction.response.send_message(f"🔗 **تم ربط كود الدعوة `{invite_code}` بمنح رول {role.mention} فور الانضمام.**", ephemeral=True)
 
     # --------------------------------------------------------------------------
-    # 2. نظام الرولات اللاصقة (Sticky Roles)
+    # 2. أمر إنشاء لوحة الرولات الذاتية (Self-Roles Panel)
     # --------------------------------------------------------------------------
     @app_commands.command(
-        name="mega_ar_sticky",
-        description="[الرولات اللاصقة] تفعيل أو إلغاء حفظ رولات الأعضاء عند مغادرتهم واستعادتها تلقائياً عند عودتهم"
-    )
-    @app_commands.describe(status="حالة التفعيل (True للتفعيل الكامل، False للإيقاف)")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def mega_ar_sticky(self, interaction: discord.Interaction, status: bool):
-        guild_id = str(interaction.guild.id)
-        if guild_id not in self.database:
-            self.database[guild_id] = self._default_guild_structure()
-
-        self.database[guild_id]["sticky"]["enabled"] = status
-        save_mega_db(self.database)
-        await interaction.response.send_message(f"📌 **تم تحديث نظام الرولات اللاصقة إلى:** `{'مفعل ✅' if status else 'معطل ❌'}`", ephemeral=True)
-
-    # --------------------------------------------------------------------------
-    # 3. نظام الرولات المؤجلة (Delayed Roles)
-    # --------------------------------------------------------------------------
-    @app_commands.command(
-        name="mega_ar_delayed",
-        description="[الرولات المؤجلة] منح رول تلقائي للأعضاء الجدد بعد بقائهم في السيرفر لفترة زمنية محددة"
-    )
-    @app_commands.describe(
-        role="الرول المراد منحه بعد انقضاء الوقت",
-        minutes_delay="مدة البقاء اللازمة في السيرفر بالدقائق"
-    )
-    @app_commands.checks.has_permissions(administrator=True)
-    async def mega_ar_delayed(self, interaction: discord.Interaction, role: discord.Role, minutes_delay: int):
-        guild_id = str(interaction.guild.id)
-        if guild_id not in self.database:
-            self.database[guild_id] = self._default_guild_structure()
-
-        self.database[guild_id]["delayed"].append({
-            "role_id": role.id,
-            "delay_minutes": minutes_delay
-        })
-        save_mega_db(self.database)
-        await interaction.response.send_message(f"⏳ **تمت إضافة قاعدة رولات مؤجلة: منح {role.mention} تلقائياً بعد {minutes_delay} دقيقة من الانضمام.**", ephemeral=True)
-
-    # --------------------------------------------------------------------------
-    # 4. نظام قواعد الدعوات (Invite Roles)
-    # --------------------------------------------------------------------------
-    @app_commands.command(
-        name="mega_ar_invite",
-        description="[قواعد الدعوات] منح رول تلقائي عند دخول العضو باستخدام رابط دعوة مخصص ومحدد"
-    )
-    @app_commands.describe(
-        invite_code="كود الدعوة فقط (مثال: إذا كان الرابط discord.gg/ziuo اكتب ziuo)",
-        role="الرول المرتبط بهذه الدعوة"
-    )
-    @app_commands.checks.has_permissions(administrator=True)
-    async def mega_ar_invite(self, interaction: discord.Interaction, invite_code: str, role: discord.Role):
-        guild_id = str(interaction.guild.id)
-        if guild_id not in self.database:
-            self.database[guild_id] = self._default_guild_structure()
-
-        self.database[guild_id]["invites"].append({
-            "code": invite_code.strip(),
-            "role_id": role.id
-        })
-        save_mega_db(self.database)
-        await interaction.response.send_message(f"🔗 **تم ربط كود الدعوة `{invite_code}` بمنح رول {role.mention} فور انضمام العضو.**", ephemeral=True)
-
-    # --------------------------------------------------------------------------
-    # 5. النظام الخارق للرولات ذاتية التعيين (Self-Roles Panels & Behaviors)
-    # --------------------------------------------------------------------------
-    @app_commands.command(
-        name="mega_ar_panel",
-        description="[الرولات ذاتية التعيين] إنشاء لوحة تفاعلية متكاملة (أزرار أو قوائم) مع تحديد السلوك والإشعارات"
+        name="autopanel",
+        description="[الرولات ذاتية التعيين] إنشاء لوحة تفاعلية متكاملة (أزرار أو قوائم منسدلة)"
     )
     @app_commands.describe(
         channel="روم إرسال لوحة الرولات",
         title="عنوان اللوحة البارز",
         interaction_type="نوع التفاعل: أزرار تفاعلية (button) أم قائمة منسدلة (select)",
-        behavior="سلوك التفاعل: تبديل (toggle)، إضافة فقط (add_only)، أو إزالة فقط (remove_only)",
-        notifications="تفعيل الإشعارات الخاصة عند استلام أو فقدان الرول (True / False)",
         role1="الرول الأول", label1="اسم الزر/الخيار الأول", emoji1="إيموجي الزر الأول (اختياري)",
         role2="الرول الثاني (اختياري)", label2="اسم الزر الثاني (اختياري)", emoji2="إيموجي الزر الثاني (اختياري)"
     )
-    @app_choices(
+    @app_commands.choices(
         interaction_type=[
             app_commands.Choice(name="أزرار تفاعلية (Buttons)", value="button"),
             app_commands.Choice(name="قائمة منسدلة (Select Menu)", value="select")
-        ],
-        behavior=[
-            app_commands.Choice(name="تبديل - Toggle (امتلاك عدة رولات وتغييرها)", value="toggle"),
-            app_commands.Choice(name="إضافة فقط - Add Only (منح رول جديد بكل مرة)", value="add_only"),
-            app_commands.Choice(name="إزالة فقط - Remove Only (عكس الوضع القياسي)", value="remove_only")
         ]
     )
     @app_commands.checks.has_permissions(administrator=True)
-    async def mega_ar_panel(
+    async def autopanel(
         self,
         interaction: discord.Interaction,
         channel: discord.TextChannel,
         title: str,
         interaction_type: Literal["button", "select"],
-        behavior: Literal["toggle", "add_only", "remove_only"],
-        notifications: bool,
         role1: discord.Role,
         label1: str,
         emoji1: Optional[str] = None,
@@ -306,11 +243,6 @@ class ZiuoMegaAutoRolesEnterpriseCog(commands.Cog):
         guild_id = str(interaction.guild.id)
         if guild_id not in self.database:
             self.database[guild_id] = self._default_guild_structure()
-
-        # حفظ الإعدادات المتقدمة والسلوك في قاعدة البيانات الخاصة بالسيرفر
-        self.database[guild_id]["panel_behavior"] = behavior
-        self.database[guild_id]["notifications_enabled"] = notifications
-        save_mega_db(self.database)
 
         roles_config = [{"role_id": role1.id, "label": label1, "emoji": emoji1, "description": f"الحصول على رول {role1.name}"}]
         if role2 and label2:
@@ -324,7 +256,7 @@ class ZiuoMegaAutoRolesEnterpriseCog(commands.Cog):
 
         embed = discord.Embed(
             title=f"🎨 **{title}**",
-            description="> **اختر رولاتك المفضلة وتفاعل مع اللوحة بالأسفل بكل سهولة وحرية مطلقة!** 👇",
+            description="> **اختر رولاتك المفضلة وتفاعل مع اللوحة بالأسفل بكل سهولة!** 👇",
             color=0x2B2D31,
             timestamp=datetime.datetime.utcnow()
         )
@@ -332,7 +264,7 @@ class ZiuoMegaAutoRolesEnterpriseCog(commands.Cog):
 
         view = EnterpriseMegaInteractiveView(self.bot, guild_id, panel_data)
         await channel.send(embed=embed, view=view)
-        await interaction.response.send_message(f"✅ **تم إنشاء لوحة الرولات الذاتية الإمبراطورية بنجاح في روم** {channel.mention}!", ephemeral=True)
+        await interaction.response.send_message(f"✅ **تم إنشاء لوحة الرولات الذاتية بنجاح في روم** {channel.mention}!", ephemeral=True)
 
     # --------------------------------------------------------------------------
     # ⚙️ هيكل البيانات الافتراضي للسيرفر
@@ -344,14 +276,10 @@ class ZiuoMegaAutoRolesEnterpriseCog(commands.Cog):
             "delayed": [],
             "invites": [],
             "saved_members_roles": {},
-            "pending_delayed": [],
-            "panel_behavior": "toggle",
-            "notifications_enabled": False,
-            "assign_message": "تم إعطاؤك رول [Role] بنجاح!",
-            "remove_message": "تم إزالة رول [Role] منك بنجاح."
+            "pending_delayed": []
         }
 
-    # --- 🛡️ مستمعو الأحداث الآلية والتنفيذ التلقائي بالخلفية ---
+    # --- 🛡️ مستمعو الأحداث الآلية بالخلفية ---
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
@@ -361,7 +289,7 @@ class ZiuoMegaAutoRolesEnterpriseCog(commands.Cog):
 
         db_guild = self.database[guild_id]
 
-        # 1. تطبيق الرولات التلقائية الفورية للأعضاء أو البوتات
+        # 1. الرولات الفورية
         target_key = "bot" if member.bot else "member"
         for r_id in db_guild.get("auto_roles", {}).get(target_key, []):
             role = member.guild.get_role(r_id)
@@ -371,7 +299,7 @@ class ZiuoMegaAutoRolesEnterpriseCog(commands.Cog):
                 except:
                     pass
 
-        # 2. تطبيق الرولات اللاصقة واسترجاع رولات العضو السابقة عند العودة
+        # 2. الرولات اللاصقة
         if db_guild.get("sticky", {}).get("enabled", False):
             saved = db_guild.get("saved_members_roles", {})
             if str(member.id) in saved:
@@ -383,7 +311,7 @@ class ZiuoMegaAutoRolesEnterpriseCog(commands.Cog):
                         except:
                             pass
 
-        # 3. تتبع قواعد الدعوات ومنح الرولات المرتبطة بالرابط
+        # 3. قواعد الدعوات
         try:
             old_invites = self.invites_cache.get(member.guild.id, [])
             new_invites = await member.guild.invites()
@@ -405,7 +333,7 @@ class ZiuoMegaAutoRolesEnterpriseCog(commands.Cog):
         except:
             pass
 
-        # 4. تسجيل الموقت للرولات المؤجلة
+        # 4. الرولات المؤجلة
         if "pending_delayed" not in db_guild:
             db_guild["pending_delayed"] = []
         db_guild["pending_delayed"].append({
@@ -421,7 +349,6 @@ class ZiuoMegaAutoRolesEnterpriseCog(commands.Cog):
             return
         db_guild = self.database[guild_id]
 
-        # حفظ الرولات الحالية للرولات اللاصقة عند المغادرة
         if db_guild.get("sticky", {}).get("enabled", False):
             member_roles = [r.id for r in member.roles if r != member.guild.default_role]
             if "saved_members_roles" not in db_guild:
@@ -429,7 +356,6 @@ class ZiuoMegaAutoRolesEnterpriseCog(commands.Cog):
             db_guild["saved_members_roles"][str(member.id)] = member_roles
             save_mega_db(self.database)
 
-    # اللوب الآلي لفحص ومنح الرولات المؤجلة بدقة فائقة
     @tasks.loop(minutes=1)
     async def delayed_roles_check(self):
         db = load_mega_db()
