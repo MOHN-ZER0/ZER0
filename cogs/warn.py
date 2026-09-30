@@ -29,7 +29,7 @@ DEFAULT_CONFIG = {
     "warn_names": ["التحذير الأول ✦ [1]", "التحذير الثاني ✦ [2]", "التحذير الثالث ✦ [3]"],
     "warn_roles": {}, # {"0": role_id_int, ...}
     "log_channel_id": None,
-    "punishments": {} # {"0": {"type": "timeout", "duration_minutes": 120}, ...} types: none, timeout, kick, ban
+    "punishments": {} # {"0": {"type": "timeout", "duration": 120}, ...}
 }
 
 SERVER_WARNING_CONFIGS = load_json(CONFIG_FILE, DEFAULT_CONFIG)
@@ -67,34 +67,6 @@ class WarningNamesModal(discord.ui.Modal, title="✏️ تخصيص أسماء ا
             ephemeral=True
         )
 
-class WarningRolesModal(discord.ui.Modal):
-    def __init__(self):
-        super().__init__(title="🔗 ربط رتب التحذيرات")
-        self.inputs_map = {}
-        names = SERVER_WARNING_CONFIGS.get("warn_names", [])
-        for idx, name in enumerate(names[:5]):
-            current_role_id = SERVER_WARNING_CONFIGS["warn_roles"].get(str(idx), "")
-            text_input = discord.ui.TextInput(
-                label=f"آيدي رتبة: {name}",
-                placeholder="اكتب آيدي الرتبة هنا (اختياري)",
-                default=str(current_role_id) if current_role_id else "",
-                required=False,
-                max_length=30
-            )
-            self.add_item(text_input)
-            self.inputs_map[idx] = text_input
-
-    async def on_submit(self, interaction: discord.Interaction):
-        new_roles_map = {}
-        for idx, text_input in self.inputs_map.items():
-            val = text_input.value.strip()
-            if val.isdigit():
-                new_roles_map[str(idx)] = int(val)
-        
-        SERVER_WARNING_CONFIGS["warn_roles"] = new_roles_map
-        save_configs()
-        await interaction.response.send_message("✅ **تم تحديث وحفظ ربط رتب التحذيرات بنجاح!**", ephemeral=True)
-
 class LogChannelModal(discord.ui.Modal, title="📢 تعيين قناة لوج التحذيرات"):
     channel_id_input = discord.ui.TextInput(
         label="اكتب آيدي (ID) قناة اللوج المطلوبة",
@@ -122,6 +94,125 @@ class LogChannelModal(discord.ui.Modal, title="📢 تعيين قناة لوج �
 
 
 # ==============================================================================
+# 🔗 نظام ربط الرتب بالصفحات (Pagination & Role Select)
+# ==============================================================================
+class WarningRolesSelectView(discord.ui.View):
+    def __init__(self, page: int = 0):
+        super().__init__(timeout=180)
+        self.page = page
+        self.setup_components()
+
+    def setup_components(self):
+        self.clear_items()
+        names = SERVER_WARNING_CONFIGS.get("warn_names", [])
+        items_per_page = 4 # 4 قوائم اختيار رتبة في كل صفحة لترك مساحة لأزرار التنقل
+        total_pages = max(1, (len(names) + items_per_page - 1) // items_per_page)
+
+        if self.page >= total_pages:
+            self.page = total_pages - 1
+        if self.page < 0:
+            self.page = 0
+
+        start = self.page * items_per_page
+        end = start + items_per_page
+        current_names = names[start:end]
+
+        # إضافة قوائم اختيار الرتب للتحذيرات الموجودة في الصفحة الحالية
+        for idx, name in enumerate(current_names):
+            actual_idx = start + idx
+            current_role_id = SERVER_WARNING_CONFIGS["warn_roles"].get(str(actual_idx))
+            
+            role_select = discord.ui.RoleSelect(
+                placeholder=f"اختر رتبة: {name}",
+                min_values=1,
+                max_values=1,
+                row=idx
+            )
+            
+            # حفظ رقم التحذير جوه الـ custom callback أو تمريره عبر closure
+            async def make_callback(r_idx, select_comp):
+                async def callback(interaction: discord.Interaction):
+                    selected_role = select_comp.values[0]
+                    SERVER_WARNING_CONFIGS["warn_roles"][str(r_idx)] = selected_role.id
+                    save_configs()
+                    await interaction.response.send_message(f"✅ تم ربط التحذير (**{names[r_idx]}**) بالرتبة: {selected_role.mention}", ephemeral=True)
+                return callback
+
+            # ربط الحدث
+            role_select.callback = discord.ui.RoleSelect.callback # مؤقت
+            # بنستخدم طريقة نظيفة لتحديد الكولباك لكل عنصر
+            self.add_item(role_select)
+            
+        # إضافة أزرار التنقل بين الصفحات (Pagination Buttons) لو فيه صفحات متعددة
+        if total_pages > 1:
+            prev_button = discord.ui.Button(label="⬅️ السابق", style=discord.ButtonStyle.secondary, row=4, disabled=(self.page == 0))
+            async def prev_callback(interaction: discord.Interaction):
+                await interaction.response.edit_message(view=WarningRolesSelectView(self.page - 1))
+            prev_button.callback = prev_callback
+            self.add_item(prev_button)
+
+            page_indicator = discord.ui.Button(label=f"الصفحة {self.page + 1} من {total_pages}", style=discord.ButtonStyle.blurple, row=4, disabled=True)
+            self.add_item(page_indicator)
+
+            next_button = discord.ui.Button(label="التالي ➡️", style=discord.ButtonStyle.secondary, row=4, disabled=(self.page >= total_pages - 1))
+            async def next_callback(interaction: discord.Interaction):
+                await interaction.response.edit_message(view=WarningRolesSelectView(self.page + 1))
+            next_button.callback = next_callback
+            self.add_item(next_button)
+
+# ملاحظة: لتصحيح ربط الكولباك الخاص بـ RoleSelect ديناميكياً בצורה سليمة تماماً في Python، هنكتبهم مباشرة بالشكل التالي:
+class DynamicRoleSelectView(discord.ui.View):
+    def __init__(self, page: int = 0):
+        super().__init__(timeout=180)
+        self.page = page
+        names = SERVER_WARNING_CONFIGS.get("warn_names", [])
+        items_per_page = 4
+        total_pages = max(1, (len(names) + items_per_page - 1) // items_per_page)
+        
+        if self.page >= total_pages: self.page = total_pages - 1
+        if self.page < 0: self.page = 0
+
+        start = self.page * items_per_page
+        end = start + items_per_page
+        current_names = names[start:end]
+
+        for i, name in enumerate(current_names):
+            actual_idx = start + i
+            select = discord.ui.RoleSelect(
+                placeholder=f"اختر رتبة: {name}",
+                min_values=1,
+                max_values=1,
+                row=i
+            )
+            
+            # إنشاء دالة مغلقة لكل عنصر لتثبيت الـ actual_idx الصحيح
+            async def callback_factory(interaction: discord.Interaction, sel=select, idx=actual_idx):
+                role = sel.values[0]
+                SERVER_WARNING_CONFIGS["warn_roles"][str(idx)] = role.id
+                save_configs()
+                await interaction.response.send_message(f"✅ **تم التحديث!** تم ربط التحذير (`{names[idx]}`) بالرتبة: {role.mention}", ephemeral=True)
+            
+            select.callback = callback_factory
+            self.add_item(select)
+
+        if total_pages > 1:
+            btn_prev = discord.ui.Button(label="⬅️ السابق", style=discord.ButtonStyle.secondary, row=4, disabled=(self.page == 0))
+            async def prev_cb(i: discord.Interaction):
+                await i.response.edit_message(view=DynamicRoleSelectView(self.page - 1))
+            btn_prev.callback = prev_cb
+            self.add_item(btn_prev)
+
+            btn_info = discord.ui.Button(label=f"📄 {self.page + 1} / {total_pages}", style=discord.ButtonStyle.blurple, row=4, disabled=True)
+            self.add_item(btn_info)
+
+            btn_next = discord.ui.Button(label="التالي ➡️", style=discord.ButtonStyle.secondary, row=4, disabled=(self.page >= total_pages - 1))
+            async def next_cb(i: discord.Interaction):
+                await i.response.edit_message(view=DynamicRoleSelectView(self.page + 1))
+            btn_next.callback = next_cb
+            self.add_item(btn_next)
+
+
+# ==============================================================================
 # ⚙️ تخصيص العقوبات التصاعدية لكل مستوى تحذير
 # ==============================================================================
 class PunishmentSettingsSelect(discord.ui.Select):
@@ -130,7 +221,7 @@ class PunishmentSettingsSelect(discord.ui.Select):
         names = SERVER_WARNING_CONFIGS.get("warn_names", [])
         for idx, name in enumerate(names):
             current_p = SERVER_WARNING_CONFIGS.get("punishments", {}).get(str(idx), {"type": "none", "duration": 0})
-            p_desc = f"العقوبة الحالية: {current_p['type']} ({current_p.get('duration', 0)} دقيقة)"
+            p_desc = f"العقوبة: {current_p['type']} ({current_p.get('duration', 0)} دقيقة)"
             options.append(discord.SelectOption(label=f"مستوى {idx+1}: {name}", description=p_desc[:100], value=str(idx)))
         
         super().__init__(placeholder="⚙️ اختر التحذير لتعديل عقوبته التصاعدية...", min_values=1, max_values=1, options=options)
@@ -149,15 +240,15 @@ class PunishmentEditModal(discord.ui.Modal):
         current = SERVER_WARNING_CONFIGS.get("punishments", {}).get(str(warn_idx), {"type": "none", "duration": 60})
         
         self.p_type = discord.ui.TextInput(
-            label="نوع العقوبة (اكتب: none, timeout, kick, ban)",
+            label="نوع العقوبة (none, timeout, kick, ban)",
             placeholder="timeout",
             default=current.get("type", "none"),
             required=True,
             max_length=20
         )
         self.p_duration = discord.ui.TextInput(
-            label="مدة التايم أوت بالدقائق (لو العقوبة timeout)",
-            placeholder="120 (مثال تعني ساعتين)",
+            label="مدة التايم أوت بالدقائق (لو timeout)",
+            placeholder="120",
             default=str(current.get("duration", 0)),
             required=False,
             max_length=10
@@ -302,7 +393,12 @@ class AdvancedWarningsDashboard(discord.ui.View):
         if not interaction.user.guild_permissions.manage_roles:
             await interaction.response.send_message("❌ للمسؤولين فقط!", ephemeral=True)
             return
-        await interaction.response.send_modal(WarningRolesModal())
+        # استخدام نظام القوائم مع الصفحات لدعم أي عدد من التحذيرات (أكثر من 5)
+        await interaction.response.send_message(
+            "🛡️ **اختر رتبة لكل تحذير من القائمة أدناه:**\n*(يمكنك التنقل بين الصفحات لو عدد التحذيرات كبير)*", 
+            view=DynamicRoleSelectView(0), 
+            ephemeral=True
+        )
 
     @discord.ui.button(label="⚙️ عقوبات تصاعدية", style=discord.ButtonStyle.secondary, emoji="⚡", row=0)
     async def set_punishments(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -339,7 +435,7 @@ class AdvancedWarningsDashboard(discord.ui.View):
         embed = discord.Embed(title="📊 ╎ سجـل الـتـحـذيـرات الـنـشـطة", description=desc, color=0x111111)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="🛠️ إزالة تحذير مفرد", style=discord.ButtonStyle.danger, emoji="⚡", row=2)
+    @discord.ui.button(label="🛠️️ إزالة تحذير مفرد", style=discord.ButtonStyle.danger, emoji="⚡", row=2)
     async def remove_warn_dashboard(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.manage_roles:
             await interaction.response.send_message("❌ للمسؤولين فقط!", ephemeral=True)
@@ -361,7 +457,7 @@ class AdvancedWarningsDashboard(discord.ui.View):
 
 
 # ==============================================================================
-# 🛡️ كوج إدارة التحذيرات الخارق والمدمج
+# 🛡️️ كوج إدارة التحذيرات الخارق والمدمج
 # ==============================================================================
 class UltimateWarningSystemCog(commands.Cog):
     def __init__(self, bot):
@@ -399,7 +495,6 @@ class UltimateWarningSystemCog(commands.Cog):
         
         await interaction.response.defer(ephemeral=False)
 
-        # منح رتبة التحذير الخاصة بهذا المستوى
         assigned_role_text = "بدون رتبة تلقائية"
         if role_id:
             role = interaction.guild.get_role(role_id)
@@ -426,7 +521,6 @@ class UltimateWarningSystemCog(commands.Cog):
         save_db()
         total_user_warns = len(WARNINGS_DB[user_key])
 
-        # تنفيذ العقوبة التصاعدية المخصصة لهذا التحذير من الإعدادات
         punishments_config = SERVER_WARNING_CONFIGS.get("punishments", {})
         p_info = punishments_config.get(str(warn_level), {"type": "none", "duration": 0})
         p_type = p_info.get("type", "none")
