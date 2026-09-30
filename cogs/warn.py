@@ -4,246 +4,413 @@ from discord.ext import commands
 import datetime
 
 # ==============================================================================
-# ⚠️ جدول رتب التحذيرات المترتبة من الأول للسابع بالأيديهات المحددة
+# 🗄️ قواعد البيانات الديناميكية المؤقتة للإعدادات والسجلات
 # ==============================================================================
-WARN_ROLES = [
-    {"level": 1, "id": 1543880992069132370, "name": "التحذير الأول ✦ [1]"},
-    {"level": 2, "id": 1543880990668095610, "name": "التحذير الثاني ✦ [2]"},
-    {"level": 3, "id": 1546194848342610021, "name": "التحذير الثالث ✦ [3]"},
-    {"level": 4, "id": 1546194915938279464, "name": "التحذير الرابع ✦ [4]"},
-    {"level": 5, "id": 1546195079440502814, "name": "التحذير الخامس ✦ [5]"},
-    {"level": 6, "id": 1546195378175746188, "name": "التحذير السادس ✦ [6]"},
-    {"level": 7, "id": 1546195501374898226, "name": "التحذير السابع ✦ [7]"},
-]
+SERVER_WARNING_CONFIGS = {
+    "warn_names": ["التحذير الأول ✦ [1]", "التحذير الثاني ✦ [2]", "التحذير الثالث ✦ [3]"],
+    "warn_roles": {}, # صيغة التخزين: {index_int: role_id_int}
+    "log_channel_id": None # أيدي قناة اللوج الخاصة بالتحذيرات
+}
 
-WARNINGS_DB = {} # قاعدة بيانات مؤقتة لتخزين سجل تحذيرات الأعضاء {user_id: [{"level": int, "role_name": str, "reason": str, "moderator": str, "date": str}]}
+WARNINGS_DB = {} # {user_id: [{"level": int, "name": str, "reason": str, "duration": str, "moderator": str, "date": str}]}
 
 # ==============================================================================
-# 🎛️ واجهة لوحة تحكم التحذيرات التفاعلية المتقدمة
+# 📝 نماذج الإدخال التفاعلية (Modals) لتخصيص الإعدادات
+# ==============================================================================
+class WarningNamesModal(discord.ui.Modal, title="✏️ تخصيص أسماء التحذيرات"):
+    warnings_input = discord.ui.TextInput(
+        label="أسماء التحذيرات (كل اسم في سطر مستقل)",
+        style=discord.TextStyle.paragraph,
+        placeholder="تحذير اول\nتحذير ثاني\nتحذير ثالث",
+        required=True,
+        max_length=1000
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        lines = [line.strip() for line in self.warnings_input.value.split("\n") if line.strip()]
+        if not lines:
+            await interaction.response.send_message("❌ يجب إدخال اسم تحذير واحد على الأقل!", ephemeral=True)
+            return
+        
+        SERVER_WARNING_CONFIGS["warn_names"] = lines
+        await interaction.response.send_message(
+            f"✅ **تم تحديث أسماء التحذيرات بنجاح!**\nالعدد الإجمالي: `{len(lines)}` مستويات.",
+            ephemeral=True
+        )
+
+class WarningRolesModal(discord.ui.Modal, title="🔗 ربط أيديهات رتب التحذيرات"):
+    roles_input = discord.ui.TextInput(
+        label="اكتب الـ ID الخاص بكل رتبة (كل ID في سطر بالترتيب)",
+        style=discord.TextStyle.paragraph,
+        placeholder="1543880992069132370\n1543880990668095610",
+        required=True,
+        max_length=1000
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        lines = [line.strip() for line in self.roles_input.value.split("\n") if line.strip()]
+        new_roles_map = {}
+        
+        for idx, role_id_str in enumerate(lines):
+            if role_id_str.isdigit():
+                new_roles_map[idx] = int(role_id_str)
+        
+        SERVER_WARNING_CONFIGS["warn_roles"] = new_roles_map
+        await interaction.response.send_message("✅ **تم تحديث ربط رتب التحذيرات بنجاح!**", ephemeral=True)
+
+class LogChannelModal(discord.ui.Modal, title="📢 تعيين قناة لوج التحذيرات"):
+    channel_id_input = discord.ui.TextInput(
+        label="اكتب آيدي (ID) قناة اللوج المطلوبة",
+        style=discord.TextStyle.short,
+        placeholder="123456789012345678",
+        required=True,
+        max_length=30
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        ch_id_str = self.channel_id_input.value.strip()
+        if not ch_id_str.isdigit():
+            await interaction.response.send_message("❌ الآيدي المدخل غير صحيح! يجب أن يتكون من أرقام فقط.", ephemeral=True)
+            return
+        
+        ch_id = int(ch_id_str)
+        channel = interaction.guild.get_channel(ch_id)
+        if not channel:
+            await interaction.response.send_message("❌ لم يتم العثور على القناة بهذا الآيدي في السيرفر!", ephemeral=True)
+            return
+
+        SERVER_WARNING_CONFIGS["log_channel_id"] = ch_id
+        await interaction.response.send_message(f"✅ **تم بنجاح!** تم تعيين قناة اللوج الرسمية للتحذيرات لتكون: {channel.mention}", ephemeral=True)
+
+
+# ==============================================================================
+# 🗑️ قوائم الحذف والتصفير التفاعلية (Select Menus)
+# ==============================================================================
+class RemoveSingleWarningSelect(discord.ui.Select):
+    def __init__(self):
+        options = []
+        for uid, warns in WARNINGS_DB.items():
+            if warns:
+                options.append(
+                    discord.SelectOption(label=f"User ID: {uid}", description=f"عدد التحذيرات: {len(warns)}", value=str(uid))
+                )
+        if not options:
+            options.append(discord.SelectOption(label="لا توجد تحذيرات نشطة حالياً", value="none"))
+
+        super().__init__(placeholder="🔽 اختر العضو لإزالة آخر تحذير عنه...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            await interaction.response.send_message("❌ لا توجد تحذيرات لإزالتها.", ephemeral=True)
+            return
+
+        user_id = int(self.values[0])
+        if user_id not in WARNINGS_DB or not WARNINGS_DB[user_id]:
+            await interaction.response.send_message("❌ سجل هذا العضو أصبح فارغاً.", ephemeral=True)
+            return
+
+        removed = WARNINGS_DB[user_id].pop()
+        if not WARNINGS_DB[user_id]:
+            del WARNINGS_DB[user_id]
+
+        member = interaction.guild.get_member(user_id)
+        if member:
+            for r_id in SERVER_WARNING_CONFIGS["warn_roles"].values():
+                role = interaction.guild.get_role(r_id)
+                if role and role in member.roles:
+                    try:
+                        await member.remove_roles(role, reason="Unwarned via Dashboard")
+                    except:
+                        pass
+
+        await interaction.response.send_message(f"✅ **تم بنجاح!** تم إزالة التحذير (`{removed['name']}`) عن العضو (ID: `{user_id}`).", ephemeral=True)
+
+class ClearAllUserWarningsSelect(discord.ui.Select):
+    def __init__(self):
+        options = []
+        for uid, warns in WARNINGS_DB.items():
+            if warns:
+                options.append(
+                    discord.SelectOption(label=f"User ID: {uid}", description=f"مسح كامل لعدد {len(warns)} تحذيرات", value=str(uid))
+                )
+        if not options:
+            options.append(discord.SelectOption(label="لا توجد تحذيرات نشطة حالياً", value="none"))
+
+        super().__init__(placeholder="🗑️ اختر العضو لمسح سجله بالكامل...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            await interaction.response.send_message("❌ لا توجد سجلات لتحذيرات لتصفيرها.", ephemeral=True)
+            return
+
+        user_id = int(self.values[0])
+        if user_id not in WARNINGS_DB:
+            await interaction.response.send_message("❌ هذا العضو ليس لديه سجل نشط.", ephemeral=True)
+            return
+
+        # مسح السجل بالكامل من القاموس
+        del WARNINGS_DB[user_id]
+
+        # سحب جميع رتب التحذيرات المرتبطة من العضو
+        member = interaction.guild.get_member(user_id)
+        if member:
+            for r_id in SERVER_WARNING_CONFIGS["warn_roles"].values():
+                role = interaction.guild.get_role(r_id)
+                if role and role in member.roles:
+                    try:
+                        await member.remove_roles(role, reason="Full warning logs cleared by Admin")
+                    except:
+                        pass
+
+        await interaction.response.send_message(f"🧹 **تم التصفير بنجاح!** تم مسح سجل التحذيرات بالكامل للعضو (ID: `{user_id}`) وإزالة جميع رتبه المرتبطة.", ephemeral=True)
+
+class RemoveWarningView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(RemoveSingleWarningSelect())
+
+class ClearAllWarningsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(ClearAllUserWarningsSelect())
+
+
+# ==============================================================================
+# 🎛️ لوحة التحكم الرئيسية التفاعلية (Dashboard)
 # ==============================================================================
 class AdvancedWarningsDashboard(discord.ui.View):
     def __init__(self, bot):
         super().__init__(timeout=300)
         self.bot = bot
 
-    @discord.ui.button(label="📋 عرض جميع المحذرين", style=discord.ButtonStyle.primary, emoji="📊", custom_id="ziuo_all_warns_btn")
+    @discord.ui.button(label="✏️ تعديل الأسماء", style=discord.ButtonStyle.secondary, emoji="📋", row=0)
+    async def edit_names(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ للمسؤولين فقط!", ephemeral=True)
+            return
+        await interaction.response.send_modal(WarningNamesModal())
+
+    @discord.ui.button(label="🔗 تعيين الرتب", style=discord.ButtonStyle.secondary, emoji="🛡️", row=0)
+    async def edit_roles(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ للمسؤولين فقط!", ephemeral=True)
+            return
+        await interaction.response.send_modal(WarningRolesModal())
+
+    @discord.ui.button(label="📢 قناة اللوج", style=discord.ButtonStyle.secondary, emoji="⚙️", row=0)
+    async def set_log_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ هذا الزر مخصص لمدربي السيرفر (Administrator) فقط!", ephemeral=True)
+            return
+        await interaction.response.send_modal(LogChannelModal())
+
+    @discord.ui.button(label="📊 عرض المخالفين", style=discord.ButtonStyle.primary, emoji="👥", row=1)
     async def show_all_warnings(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not WARNINGS_DB:
-            await interaction.response.send_message("🌟 سجل نظيف! لا توجد أي تحذيرات نشطة مسجلة في السيرفر حالياً.", ephemeral=True)
+            await interaction.response.send_message("🌟 **سجل نظيف تماماً!** مفيش أي شخص واخد تحذيرات حالياً.", ephemeral=True)
             return
         
-        desc = "> 📋 **قائمة المخالفين وسجلات التحذيرات النشطة:**\n━━━━━━━━━━━━━━━━━━━━━\n"
+        desc = "> 📋 **قائمة الأعضاء المخالفين حالياً:**\n━━━━━━━━━━━━━━━━━━━━━\n"
         for uid, warns in WARNINGS_DB.items():
             member = interaction.guild.get_member(uid)
             m_name = member.mention if member else f"عضو مغادر (`{uid}`)"
-            desc += f"👤 **{m_name}** ── ｢ إجمالي الإنذارات: **{len(warns)}** ｣\n"
+            desc += f"👤 **{m_name}** ── ｢ الإنذارات: **{len(warns)}** ｣\n"
             for w in warns:
-                desc += f" └ ⚡ `{w['role_name']}` | السبب: `{w['reason']}`\n"
+                desc += f" └ ⚡ `{w['name']}` | ⏳ المدة: `{w['duration']}` | السبب: `{w['reason']}`\n"
             desc += "\n"
         
         if len(desc) > 4000:
             desc = desc[:3996] + "..."
 
-        embed = discord.Embed(
-            title="📊 ╎ سـجـل تـحـذيـرات الأعـضـاء الـشـامـل 〣 ｢Z I UO｣",
-            description=desc,
-            color=0x111111,
-            timestamp=datetime.datetime.utcnow()
-        )
-        embed.set_footer(text="Z I UO Enterprise Management System ✦ Warnings Engine")
+        embed = discord.Embed(title="📊 ╎ سجـل الـتـحـذيـرات الـنـشـطة", description=desc, color=0x111111)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="🧹 تنظيف السجلات الفارغة", style=discord.ButtonStyle.danger, emoji="🗑️", custom_id="ziuo_clean_warns_btn")
-    async def clean_database(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ هذا الزر مخصص لمدراء السيرفر فقط (Administrator)!", ephemeral=True)
+    @discord.ui.button(label="🛠️ إزالة تحذير مفرد", style=discord.ButtonStyle.danger, emoji="⚡", row=1)
+    async def remove_warn_dashboard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ للمسؤولين فقط!", ephemeral=True)
             return
-        
-        count = 0
-        for uid in list(WARNINGS_DB.keys()):
-            if not WARNINGS_DB[uid]:
-                del WARNINGS_DB[uid]
-                count += 1
+        if not WARNINGS_DB:
+            await interaction.response.send_message("🌟 لا توجد تحذيرات لإزالتها.", ephemeral=True)
+            return
+        await interaction.response.send_message("🔽 **اختر العضو لسحب آخر تحذير عنه:**", view=RemoveWarningView(), ephemeral=True)
 
-        await interaction.response.send_message(f"✅ تم فحص وتنظيف قاعدة البيانات بنجاح! (تمت إزالة سجلات فارغة عديمة الحاجه: {count})", ephemeral=True)
+    @discord.ui.button(label="🧹 مسح سجل عضو بالكامل", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
+    async def clear_all_user_warns(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ للمسؤولين فقط!", ephemeral=True)
+            return
+        if not WARNINGS_DB:
+            await interaction.response.send_message("🌟 لا توجد أي سجلات تحذيرات لتصفيرها.", ephemeral=True)
+            return
+        await interaction.response.send_message("🗑️ **اختر العضو المراد تصفير ومسح سجله بالكامل:**", view=ClearAllWarningsView(), ephemeral=True)
 
 
 # ==============================================================================
-# 🛡️️ Cog إدارة التحذيرات الخارق والمدمج
+# 🛡️ كوج إدارة التحذيرات الخارق والمدمج
 # ==============================================================================
 class UltimateWarningSystemCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # ==========================================================================
-    # 1. أمر إعطاء التحذير (Warn Command)
-    # ==========================================================================
-    @app_commands.command(name="warn", description="[إدارة] إعطاء تحذير رسمي متطور لعضو واختيار رتبة التحذير من الأول للسابع مع السبب")
+    async def get_warn_choices(interaction: discord.Interaction):
+        choices = []
+        names = SERVER_WARNING_CONFIGS["warn_names"]
+        for idx, name in enumerate(names):
+            if idx < 25:
+                choices.append(app_commands.Choice(name=name, value=idx))
+        return choices
+
+    # 1. أمر إعطاء التحذير (/warn)
+    @app_commands.command(name="warn", description="[إدارة] إعطاء تحذير رسمي لعضو مع تحديد المستوى، السبب، والمدة بدقة")
     @app_commands.describe(
         member="العضو المراد تحذيره",
-        warn_level="مستوى التحذير المطلوب (من 1 إلى 7)",
-        reason="سبب إصدار التحذير بالتفصيل"
+        warn_level="مستوى التحذير المطلوب",
+        duration="مدة التحذير (مثال: 1d أو 1h أو 1m)",
+        reason="سبب إصدار التحذير (اختياري)"
     )
-    @app_commands.choices(warn_level=[
-        app_commands.Choice(name="التحذير الأول ✦ [1]", value=1),
-        app_commands.Choice(name="التحذير الثاني ✦ [2]", value=2),
-        app_commands.Choice(name="التحذير الثالث ✦ [3]", value=3),
-        app_commands.Choice(name="التحذير الرابع ✦ [4]", value=4),
-        app_commands.Choice(name="التحذير الخامس ✦ [5]", value=5),
-        app_commands.Choice(name="التحذير السادس ✦ [6]", value=6),
-        app_commands.Choice(name="التحذير السابع ✦ [7]", value=7),
-    ])
+    @app_commands.autocomplete(warn_level=get_warn_choices)
     @app_commands.checks.has_permissions(manage_roles=True, moderate_members=True)
-    async def warn(self, interaction: discord.Interaction, member: discord.Member, warn_level: int, reason: str):
-        if member.id == interaction.user.id:
-            await interaction.response.send_message("❌ لا يمكنك تحذير نفسك يا أسطورة!", ephemeral=True)
+    async def warn(self, interaction: discord.Interaction, member: discord.Member, warn_level: int, duration: str = "دائم", reason: str = "بدون سبب مخصص"):
+        if member.id == interaction.user.id or member.bot or member.id == interaction.guild.owner_id:
+            await interaction.response.send_message("❌ لا يمكنك تحذير هذا الشخص!", ephemeral=True)
             return
 
-        if member.bot:
-            await interaction.response.send_message("❌ لا يمكنك تحذير بوت في السيرفر!", ephemeral=True)
+        names = SERVER_WARNING_CONFIGS["warn_names"]
+        if warn_level < 0 or warn_level >= len(names):
+            await interaction.response.send_message("❌ مستوى التحذير غير صالح.", ephemeral=True)
             return
-
-        if member.id == interaction.guild.owner_id:
-            await interaction.response.send_message("❌ خطأ أحمر! لا يمكنك تحذير مالك السيرفر (Owner) أبداً!", ephemeral=True)
-            return
-
-        selected_warn = next((r for r in WARN_ROLES if r["level"] == warn_level), None)
-        if not selected_warn:
-            await interaction.response.send_message("❌ خطأ: مستوى التحذير المختار غير صالح.", ephemeral=True)
-            return
-
-        role = interaction.guild.get_role(selected_warn["id"])
-        if not role:
-            await interaction.response.send_message("❌ خطأ: لم يتم العثور على رتبة التحذير المطابقة في رتب السيرفر، تأكد من الأيديهات.", ephemeral=True)
-            return
-
+        
+        warn_name = names[warn_level]
+        role_id = SERVER_WARNING_CONFIGS["warn_roles"].get(warn_level)
+        
         await interaction.response.defer(ephemeral=False)
 
-        # إزالة رتب التحذير القديمة لمنع تداخل الرتب وتنظيم الهرمية
+        # إزالة الرتب القديمة والتحديث التلقائي
         removed_roles_names = []
-        for w_info in WARN_ROLES:
-            old_role = interaction.guild.get_role(w_info["id"])
-            if old_role and old_role in member.roles and old_role.id != role.id:
+        for idx, r_id in SERVER_WARNING_CONFIGS["warn_roles"].items():
+            old_role = interaction.guild.get_role(r_id)
+            if old_role and old_role in member.roles and idx != warn_level:
                 try:
-                    await member.remove_roles(old_role, reason="Upgrading or changing warning level automatically")
+                    await member.remove_roles(old_role, reason="Upgrading warning level automatically")
                     removed_roles_names.append(old_role.name)
                 except:
                     pass
 
-        # منح رتبة التحذير الجديدة
-        try:
-            await member.add_roles(role, reason=f"Warned by {interaction.user} | Reason: {reason}")
-        except discord.HTTPException as e:
-            await interaction.followup.send(f"❌ فشل في منح الرتبة للعضو، تأكد أن رتبة البوت أعلى من رتبة التحذير: `{e}`", ephemeral=True)
-            return
-        
-        # حفظ السجل في قاعدة البيانات
+        assigned_role_text = "بدون رتبة تلقائية"
+        if role_id:
+            role = interaction.guild.get_role(role_id)
+            if role:
+                try:
+                    await member.add_roles(role, reason=f"Warned by {interaction.user} | Reason: {reason}")
+                    assigned_role_text = role.mention
+                except discord.HTTPException as e:
+                    assigned_role_text = f"فشل منح الرتبة: `{e}`"
+
         if member.id not in WARNINGS_DB:
             WARNINGS_DB[member.id] = []
         
         warning_record = {
             "level": warn_level,
-            "role_name": selected_warn["name"],
+            "name": warn_name,
             "reason": reason,
+            "duration": duration,
             "moderator": interaction.user.display_name,
             "date": datetime.datetime.utcnow().strftime("%Y/%m/%d %H:%M")
         }
         WARNINGS_DB[member.id].append(warning_record)
-
         total_user_warns = len(WARNINGS_DB[member.id])
 
-        # ميزة ذكية إضافية: تنبيه إذا وصل لعدد تحذيرات خطير (مثلاً 3 أو أكثر)
-        auto_action_note = ""
-        if warn_level >= 3:
-            auto_action_note = "⚠️ **تنبيه إداري:** العضو وصل لمستوى متقدم من التحذيرات ويستوجب مراقبة مشددة أو عقوبة إضافية!"
+        # ميزة العقوبات التلقائية الذكية (Auto-Punishment) عند التحذير الثالث مثلاً
+        auto_action_text = "لا توجد عقوبة تلقائية"
+        if total_user_warns >= 3:
+            try:
+                # إعطاء Timeout تلقائي لمدة ساعتين تأديبيين
+                timeout_duration = datetime.timedelta(hours=2)
+                await member.timeout(timeout_duration, reason="Auto-punishment: Reached 3 warnings threshold")
+                auto_action_text = "⚡ تم تطبيق (Timeout) تلقائي لمدة ساعتين لتجاوز الحد الأقصى للإنذارات!"
+            except Exception as e:
+                auto_action_text = f"⚠️ فشل تطبيق الإسكات التلقائي: {e}"
 
         embed = discord.Embed(
-            title="⚠️ ╎ نـظـام الـتـحـذيـرات والـعـقـوبات الـمـركـزي 〣 ｢🛡️｣",
+            title="⚠️ ╎ نـظـام الـتـحـذيـرات والـعـقـوبات الـمـركـزي",
             description=f"> تم تسجيل وإصدار تحذير رسمي بحق أحد المخالفين.\n━━━━━━━━━━━━━━━━━━━━━",
             color=0xF1C40F,
             timestamp=datetime.datetime.utcnow()
         )
-        embed.add_field(name="👤 ╎ الـعـضـو المخالف", value=f"> ｢ {member.mention} ｣\n> (`{member.id}`)", inline=False)
-        embed.add_field(name="⚠️ ╎ مـسـتـوى الـتـحـذيـر", value=f"> ｢ {selected_warn['name']} ｣ (إجمالي: {total_user_warns})", inline=False)
-        embed.add_field(name="🛡️ ╎ المـسـؤول", value=f"> ｢ {interaction.user.mention} ｣", inline=False)
+        embed.add_field(name="👤 ╎ الـعـضـو المخالف", value=f"> ｢ {member.mention} ｣", inline=False)
+        embed.add_field(name="⚠️ ╎ نـوع الـتـحـذيـر", value=f"> ｢ {warn_name} ｣ (إجمالي: {total_user_warns})", inline=False)
+        embed.add_field(name="⏳ ╎ الـمـدة", value=f"> ｢ {duration} ｣", inline=False)
         embed.add_field(name="📝 ╎ الـسـبـب", value=f"> ｢ {reason} ｣", inline=False)
-        
-        if removed_roles_names:
-            embed.add_field(name="🔄 ╎ التحديثات التلقائية", value=f"> تم إزالة رتب التحذير القديمة: `{' ، '.join(removed_roles_names)}`", inline=False)
-        
-        if auto_action_note:
-            embed.add_field(name="🚨 ╎ ملاحظة النظام", value=f"> {auto_action_note}", inline=False)
+        embed.add_field(name="🎖️️ ╎ الرتبة المرتبطة", value=f"> {assigned_role_text}", inline=False)
+        if total_user_warns >= 3:
+            embed.add_field(name="🚨 ╎ إجراء تلقائي", value=f"> {auto_action_text}", inline=False)
 
         embed.set_thumbnail(url=member.display_avatar.url)
-        embed.set_footer(text="Z I UO - MC Server ✦ Enterprise Warnings Engine")
+        embed.set_footer(text="𝐙 𝐈 𝐔𝐎 ╎ Warnings Engine")
         
         await interaction.followup.send(embed=embed)
 
-    # ==========================================================================
-    # 2. أمر استعراض التحذيرات أو لوحة التحكم (Warnings Command)
-    # ==========================================================================
-    @app_commands.command(name="warnings", description="[إدارة] عرض سجل التحذيرات الشامل لعضو معين أو فتح لوحة التحكم الرئيسية")
-    @app_commands.describe(member="العضو المراد الاستعلام عن تحذيراته (اتركه فارغاً لفتح اللوحة التفاعلية)")
+        # إرسال لوج التحذير إلى القناة المخصصة تلقائياً إن وجدت
+        log_ch_id = SERVER_WARNING_CONFIGS.get("log_channel_id")
+        if log_ch_id:
+            log_channel = interaction.guild.get_channel(log_ch_id)
+            if log_channel:
+                try:
+                    log_embed = embed.copy()
+                    log_embed.title = "📢 ╎ سـجـل تـحـذيـر جـديـد (System Audit Log)"
+                    await log_channel.send(embed=log_embed)
+                except:
+                    pass
+
+    # 2. أمر استعراض التحذيرات واللوحة (/warnings)
+    @app_commands.command(name="warnings", description="[إدارة] فتح لوحة تحكم التحذيرات الشاملة أو عرض سجل عضو معين")
+    @app_commands.describe(member="العضو المراد الاستعلام عنه (اتركه فارغاً لفتح اللوحة)")
     @app_commands.checks.has_permissions(manage_roles=True)
     async def warnings(self, interaction: discord.Interaction, member: discord.Member = None):
         if member:
             if member.id not in WARNINGS_DB or not WARNINGS_DB[member.id]:
-                await interaction.response.send_message(f"✅ العضو {member.mention} لا يمتلك أي تحذيرات مسجلة في السجلات حالياً.", ephemeral=True)
+                await interaction.response.send_message(f"✅ العضو {member.mention} لا يمتلك أي تحذيرات مسجلة.", ephemeral=True)
                 return
             
             warns = WARNINGS_DB[member.id]
             desc = f"> سجّلات التحذيرات الخاصة بالعضو {member.mention} (الإجمالي: {len(warns)}):\n━━━━━━━━━━━━━━━━━━━━━\n"
             for idx, w in enumerate(warns, 1):
-                desc += f"**{idx}.** المستوى: `{w['role_name']}`\n"
-                desc += f" ✦ **السبب:** `{w['reason']}`\n"
-                desc += f" ✦ **المسؤول:** {w['moderator']} | التاريخ: `{w['date']}`\n\n"
+                desc += f"**{idx}.** المستوى: `{w['name']}`\n"
+                desc += f" ✦ **السبب:** `{w['reason']}` | **المدة:** `{w['duration']}`\n\n"
                 
-            embed = discord.Embed(
-                title=f"📋 ╎ تـحـذيـرات العـضـو: {member.display_name} 〣 ｢⚡｣",
-                description=desc,
-                color=0x2b2d31,
-                timestamp=datetime.datetime.utcnow()
-            )
-            embed.set_thumbnail(url=member.display_avatar.url)
-            embed.set_footer(text="Z I UO Warnings Archive System")
+            embed = discord.Embed(title=f"📋 ╎ تـحـذيـرات: {member.display_name}", description=desc, color=0x2B2D31)
             await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
             embed = discord.Embed(
-                title="🛡️ ╎ لـوحـة تـحـكـم ونـظـام الـتـحـذيـرات الـمـركـزي 〣 ｢Z I UO｣",
-                description="> أهلاً بك يا أسطورة في لوحة إدارة التحذيرات المتقدمة لسيرفر ZIUO.\n> استخدم الأزرار بالأسفل لتصفح وتقييم الحالات بكل سهولة وأمان.\n━━━━━━━━━━━━━━━━━━━━━",
-                color=0x2b2d31,
-                timestamp=datetime.datetime.utcnow()
+                title="🛡️ ╎ لـوحـة تـحـكـم ونـظـام الـتـحـذيـرات الـمـركـزي",
+                description="> أهلاً بك في لوحة تحكم التحذيرات المرنة لسيرفر 𝐙𝐈𝐔𝐎.\n> اختر الإجراء المناسب من الأزرار الشاملة بالأسفل:",
+                color=0x2B2D31
             )
-            embed.set_footer(text="Z I UO Enterprise Global Management System")
             await interaction.response.send_message(embed=embed, view=AdvancedWarningsDashboard(self.bot), ephemeral=True)
 
-    # ==========================================================================
-    # 3. أمر إزالة التحذير (Unwarn Command)
-    # ==========================================================================
+    # 3. أمر إزالة التحذير المباشر (/unwarn)
     @app_commands.command(name="unwarn", description="[إدارة] إزالة آخر تحذير مسجل وسحب رتبته عن العضو بدقة")
     @app_commands.describe(member="العضو المراد إزالة التحذير عنه")
     @app_commands.checks.has_permissions(manage_roles=True)
     async def unwarn(self, interaction: discord.Interaction, member: discord.Member):
         if member.id not in WARNINGS_DB or not WARNINGS_DB[member.id]:
-            await interaction.response.send_message(f"❌ العضو {member.mention} ليس لديه أي تحذيرات مسجلة لإزالتها.", ephemeral=True)
+            await interaction.response.send_message(f"❌ العضو {member.mention} ليس لديه تحذيرات لإزالتها.", ephemeral=True)
             return
 
         removed = WARNINGS_DB[member.id].pop()
-        
-        # إذا تم تفريغ قائمة تحذيرات العضو تماماً، نمسح أيديه من القاعدة لتوفير المساحة
         if not WARNINGS_DB[member.id]:
             del WARNINGS_DB[member.id]
 
-        # سحب رتبة التحذير المرتبطة من العضو
-        for w_info in WARN_ROLES:
-            role = interaction.guild.get_role(w_info["id"])
+        for r_id in SERVER_WARNING_CONFIGS["warn_roles"].values():
+            role = interaction.guild.get_role(r_id)
             if role and role in member.roles:
                 try:
                     await member.remove_roles(role, reason=f"Unwarn executed by {interaction.user}")
                 except:
                     pass
 
-        await interaction.response.send_message(f"✅ **تم بنجاح!** تم إزالة آخر تحذير مسجل بحق العضو {member.mention} (التحذير كان: **{removed['role_name']}**).", ephemeral=False)
+        await interaction.response.send_message(f"✅ **تم بنجاح!** تم إزالة آخر تحذير (`{removed['name']}`) عن العضو {member.mention}.", ephemeral=False)
 
 async def setup(bot):
     await bot.add_cog(UltimateWarningSystemCog(bot))
