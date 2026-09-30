@@ -5,10 +5,9 @@ import datetime
 import json
 import os
 import random
-from typing import Optional, Literal
 
 # ==============================================================================
-# 🌟 قاعدة البيانات ونظام الذاكرة المركزي
+# 🌟 قاعدة البيانات ونظام الذاكرة المركزي للجيف أواي
 # ==============================================================================
 GW_DB_FILE = "ziuo_giveaway_enterprise_database.json"
 
@@ -91,7 +90,7 @@ class StartGiveawayModal(discord.ui.Modal, title="إطلاق جيف أواي ج�
                f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 
         embed = discord.Embed(
-            title="<a:giveaway:1234567890> **مسـابـقـة جـيـف أواي جـديـدّة**",
+            title="🎉 **مسـابـقـة جـيـف أواي جـديـدّة**",
             description=desc,
             color=0x2b2d31,
             timestamp=datetime.datetime.utcnow()
@@ -170,14 +169,13 @@ class GiveawayDashboardSelect(discord.ui.Select):
             db[guild_id] = {"giveaways": {}, "blacklist": [], "templates": {}, "logs": {}, "settings": {}}
 
         if val == "start_gw":
-            # نطلب منه تحديد الروم أولاً أو نفتح المودال في نفس الروم الحالية
             await interaction.response.send_modal(StartGiveawayModal(self.bot, interaction.channel))
 
         elif val == "reroll_gw":
             await interaction.response.send_modal(RerollModal())
 
         elif val == "blacklist_mgmt":
-            await interaction.response.send_message("💡 **لإدارة القائمة السوداء، استخدم الأمر المباشر مع تحديد العضو:**\n`/giveaway-manage blacklist [add/remove] [العضو]`", ephemeral=True)
+            await interaction.response.send_message("💡 **لإدارة القائمة السوداء، يمكنك حظر العضو عبر الأوامر أو تحديث قاعدة البيانات مباشرة.**", ephemeral=True)
 
         elif val == "set_logs":
             db[guild_id]["logs"]["channel_id"] = interaction.channel.id
@@ -186,7 +184,7 @@ class GiveawayDashboardSelect(discord.ui.Select):
 
         elif val == "settings_gw":
             current_days = db[guild_id]["settings"].get("min_account_days", 0)
-            await interaction.response.send_message(f"⚙️ **إعدادات الحماية الحالية:**\n- أدنى عمر للحساب للمشاركة: `{current_days}` يوم.\n*(يمكنك تعديلها لاحقاً)*", ephemeral=True)
+            await interaction.response.send_message(f"⚙️ **إعدادات الحماية الحالية:**\n- أدنى عمر للحساب للمشاركة: `{current_days}` يوم.", ephemeral=True)
 
 
 class GiveawayDashboardView(discord.ui.View):
@@ -249,7 +247,6 @@ class ZiuoGiveawayDashboardCog(commands.Cog):
     def cog_unload(self):
         self.check_giveaways_loop.cancel()
 
-    # أمر واحد رئيسي يفتح لك اللوحة المنسدلة بالكامل
     @app_commands.command(
         name="giveaway",
         description="[لوحة التحكم الشاملة] إدارة جميع سحوبات السيرفر من قائمة واحدة تفاعلية"
@@ -257,7 +254,7 @@ class ZiuoGiveawayDashboardCog(commands.Cog):
     @app_commands.checks.has_permissions(administrator=True)
     async def giveaway_dashboard(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="⚙️ **لـوحـة تـحـكـم الـجـيـف أواي الإمـبـراطـوريـة**",
+            title="⚙️️ **لـوحـة تـحـكـم الـجـيـف أواي الإمـبـراطـوريـة**",
             description=(
                 "مرحباً بك يا محمد في لوحة التحكم المركزية للسحوبات والجوائز.\n\n"
                 "👇 **اختر الإجراء المناسب من القائمة المنسدلة بالأسفل للتحكم الفوري:**"
@@ -270,7 +267,6 @@ class ZiuoGiveawayDashboardCog(commands.Cog):
         view = GiveawayDashboardView(self.bot)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    # حلقة تلقائية (Loop) للتحقق من انتهاء السحوبات وإعلان الفائزين
     @tasks.loop(seconds=30)
     async def check_giveaways_loop(self):
         db = load_gw_db()
@@ -340,191 +336,3 @@ class ZiuoGiveawayDashboardCog(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(ZiuoGiveawayDashboardCog(bot))
-ge="رسالة أو نص إضافي يظهر داخل الجيف أواي (اختياري)",
-        image_url="رابط صورة الجائزة (اختياري)"
-    )
-    @app_commands.choices(
-        entry_method=[
-            app_commands.Choice(name="زر تفاعلي (Interactive Button)", value="button"),
-            app_commands.Choice(name="تفاعل رياكشن (Reaction Emoji)", value="reaction")
-        ]
-    )
-    @app_commands.checks.has_permissions(administrator=True)
-    async def giveaway_start(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel,
-        prize: str,
-        duration_minutes: int,
-        winners_count: int = 1,
-        entry_method: Literal["button", "reaction"] = "button",
-        custom_message: Optional[str] = None,
-        image_url: Optional[str] = None
-    ):
-        guild_id = str(interaction.guild.id)
-        if guild_id not in self.database:
-            self.database[guild_id] = {"giveaways": {}, "blacklist": [], "templates": {}, "logs": {}, "settings": {}}
-
-        gw_id = str(random.randint(100000, 999999))
-        ends_at = datetime.datetime.utcnow() + datetime.timedelta(minutes=duration_minutes)
-        min_days = self.database[guild_id]["settings"].get("min_account_days", 0)
-
-        desc = (
-            f"{custom_message}\n\n" if custom_message else ""
-        ) + (
-            f"> 🎁 **الجائزة:** **{prize}**\n"
-            f"> 🏆 **عدد الفائزين:** `{winners_count}`\n"
-            f"> ⏳ **ينتهي في:** <t:{int(ends_at.timestamp())}:R>\n"
-            f"> 🎮 **طريقة المشاركة:** `{'اضغط على الزر بالأسفل 👇' if entry_method == 'button' else 'اضغط على رياكشن 🎉 بالأسفل'}`\n"
-            f"> 👤 **بواسطة:** {interaction.user.mention}\n"
-            f"> 🛡 **أدنى عمر للحساب:** `{min_days} يوم`"
-        )
-
-        embed = discord.Embed(
-            title="🎉 **جـيـف أواي جـديـد ومـمـيـز!** 🎉",
-            description=desc,
-            color=0xF1C40F,
-            timestamp=datetime.datetime.utcnow()
-        )
-        if image_url:
-            embed.set_image(url=image_url)
-        embed.set_footer(text=f"Giveaway ID: {gw_id} | المشاركة عبر {entry_method}")
-
-        view = EnterpriseGiveawayButtonView(self.bot, gw_id) if entry_method == "button" else None
-        msg = await channel.send(embed=embed, view=view)
-
-        if entry_method == "reaction":
-            await msg.add_reaction("🎉")
-
-        self.database[guild_id]["giveaways"][gw_id] = {
-            "channel_id": channel.id,
-            "message_id": msg.id,
-            "prize": prize,
-            "winners_count": winners_count,
-            "ends_at": ends_at.strftime("%Y-%m-%d %H:%M:%S"),
-            "participants": [],
-            "active": True,
-            "entry_method": entry_method,
-            "min_account_days": min_days
-        }
-        save_gw_db(self.database)
-
-        await interaction.response.send_message(f"✅ **تم بنجاح بدء الجيف أواي في روم** {channel.mention} برقم مرجعي `{gw_id}`!", ephemeral=True)
-        await self.send_log(interaction.guild, "تم إنشاء جيف-اواي", f"تم إنشاء جيف أواي لجائزة **{prize}** بواسطة {interaction.user.mention}")
-
-    # 6. إعادة سحب (Reroll)
-    @app_commands.command(
-        name="giveaway_reroll",
-        description="[السحوبات] إعادة السحب واختيار فائز جديد بديل"
-    )
-    @app_commands.describe(gw_id="رقم الجيف أواي المرجعي")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def giveaway_reroll(self, interaction: discord.Interaction, gw_id: str):
-        guild_id = str(interaction.guild.id)
-        if guild_id not in self.database or gw_id not in self.database[guild_id]["giveaways"]:
-            await interaction.response.send_message("❌ **رقم السحب غير صحيح!**", ephemeral=True)
-            return
-
-        gw = self.database[guild_id]["giveaways"][gw_id]
-        
-        # إذا كانت المشاركة برياكشن، نقوم بتحديث قائمة المشاركين من الرسالة الحية فوراً
-        if gw["entry_method"] == "reaction":
-            try:
-                channel = interaction.guild.get_channel(gw["channel_id"])
-                msg = await channel.fetch_message(gw["message_id"])
-                for reaction in msg.reactions:
-                    if str(reaction.emoji) == "🎉":
-                        async for user in reaction.users():
-                            if not user.bot and str(user.id) not in gw["participants"]:
-                                gw["participants"].append(str(user.id))
-            except:
-                pass
-
-        if not gw["participants"]:
-            await interaction.response.send_message("❌ **لا يوجد مشاركين متاحين لإعادة السحب!**", ephemeral=True)
-            return
-
-        winner_id = random.choice(gw["participants"])
-        winner_member = interaction.guild.get_member(int(winner_id))
-        winner_mention = winner_member.mention if winner_member else f"<@{winner_id}>"
-
-        await interaction.response.send_message(f"🔄 **تمت إعادة السحب بنجاح! الفائز الجديد هو:** {winner_mention} مبروك جائزة ({gw['prize']})! 🎉")
-        await self.send_log(interaction.guild, "إعادة سحب جيف-اواي", f"تم اختيار فائز بديل جديد: {winner_mention} للسحب `{gw_id}`")
-
-    # 7. لووب تلقائي لفحص وإدارة السحوبات والنتائج
-    @tasks.loop(seconds=30)
-    async def check_giveaways_loop(self):
-        db = load_gw_db()
-        now = datetime.datetime.utcnow()
-
-        for guild_id, data in db.items():
-            guild = self.bot.get_guild(int(guild_id))
-            if not guild:
-                continue
-
-            for gw_id, gw in data.get("giveaways", {}).items():
-                if not gw["active"]:
-                    continue
-
-                ends_at = datetime.datetime.strptime(gw["ends_at"], "%Y-%m-%d %H:%M:%S")
-                if now >= ends_at:
-                    gw["active"] = False
-                    save_gw_db(db)
-
-                    channel = guild.get_channel(gw["channel_id"])
-                    if not channel:
-                        continue
-
-                    try:
-                        msg = await channel.fetch_message(gw["message_id"])
-                    except:
-                        msg = None
-
-                    # إذا كانت المشاركة عبر رياكشن، نجمع المشاركين من التفاعلات الحية للرسالة
-                    if gw["entry_method"] == "reaction" and msg:
-                        for reaction in msg.reactions:
-                            if str(reaction.emoji) == "🎉":
-                                async for user in reaction.users():
-                                    if not user.bot and str(user.id) not in gw["participants"] and str(user.id) not in data.get("blacklist", []):
-                                        gw["participants"].append(str(user.id))
-
-                    participants = gw["participants"]
-                    winners_count = gw["winners_count"]
-
-                    if not participants:
-                        result_text = f"❌ **انتهى السحب على ({gw['prize']})، ولم يشارك أي شخص للأسف!**"
-                    else:
-                        winners = random.sample(participants, min(len(participants), winners_count))
-                        winners_mentions = []
-                        for wid in winners:
-                            member = guild.get_member(int(wid))
-                            if member:
-                                winners_mentions.append(member.mention)
-                                if data["settings"].get("dm_winners", False):
-                                    try:
-                                        await member.send(f"🎉 **تهانينا! لقد فزت بجائزة ({gw['prize']}) في سيرفر {guild.name}!**")
-                                    except:
-                                        pass
-                            else:
-                                winners_mentions.append(f"<@{wid}>")
-                        
-                        result_text = f"🎊 **انتهى السحب! الفائزون هم:** {', '.join(winners_mentions)}\n🎁 **الجائزة:** **{gw['prize']}**"
-
-                    if msg:
-                        try:
-                            embed = msg.embeds[0]
-                            embed.color = 0xE74C3C
-                            embed.title = "🔒 **انـتـهـى الـجـيـف أواي** 🔒"
-                            await msg.edit(embed=embed, view=None)
-                        except:
-                            pass
-
-                    await channel.send(result_text)
-                    await self.send_log(guild, "انتهى جيف-اواي", f"انتهى السحب رقم `{gw_id}` للجائزة **{gw['prize']}** وتم إعلان النتائج.")
-
-    @check_giveaways_loop.before_loop
-    async def before_check_giveaways_loop(self):
-        await self.bot.wait_until_ready()
-
-async def setup(bot):
-    await bot.add_cog(ZiuoGiveawayEnterpriseCog(bot))
