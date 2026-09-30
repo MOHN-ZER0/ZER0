@@ -3,578 +3,551 @@ from discord import app_commands
 from discord.ext import commands, tasks
 import datetime
 import random
+import time
 
 # ==============================================================================
-# 🌟 نظام قاعدة البيانات الشاملة والموسعة
+# 🌟 قاعدة البيانات الداخلية الموسعة والمؤمنة (MOHN ULTRA ENGINE v3.0)
 # ==============================================================================
-SERVER_ULTRA_DB = {
-    "users": {},              # تخزين بيانات الأعضاء (xp, level, messages, voice_minutes, prestige)
-    "settings": {},           # إعدادات السيرفر الشاملة
-    "custom_cards": {},       # تخصيص بطاقات الرانك لكل عضو
-    "blacklists": {},         # القائمة السوداء للأعضاء أو القنوات
-    "temporary_boosts": {}    # مضاعفات النقاط المؤقتة
+MOHN_SERVER_DATABASE = {
+    "users": {},          # تخزين بيانات الأعضاء (xp, level, messages, voice_minutes, prestige)
+    "settings": {},       # إعدادات السيرفر المخصصة
+    "custom_cards": {},   # بطاقات الأعضاء وتخصيصاتها
+    "cooldowns": {},      # نظام الحماية من السبام
+    "audit_logs": {}      # سجلات نشاط النظام وإدارته
 }
 
-def get_guild_settings(guild_id: int):
-    if guild_id not in SERVER_ULTRA_DB["settings"]:
-        SERVER_ULTRA_DB["settings"][guild_id] = {
+# ==============================================================================
+# 🛠️ الدوال المساعدة للتحقق وجلب الإعدادات والتحليلات
+# ==============================================================================
+def fetch_guild_config(guild_id: int):
+    """جلب أو إنشاء إعدادات السيرفر الافتراضية بنجاح"""
+    if guild_id not in MOHN_SERVER_DATABASE["settings"]:
+        MOHN_SERVER_DATABASE["settings"][guild_id] = {
             "status": True,
             "multiplier": 1,
-            "ignored_channels": [],
-            "target_role_id": None,
-            "admin_role_id": None,
-            "reset_type": "none",
             "announcement_channel": None,
-            "custom_level_message": "أهلاً بك يا {user}، لقد صعدت بنجاح إلى المستوى {level}!",
-            "role_rewards": {}
+            "level_message": "كفو يا {user}! لقد حققت إنجازاً ووصلت للمستوى **{level}** بنجاح مستمر!",
+            "level_image": None,
+            "role_rewards": {},
+            "max_level": 100
         }
-    return SERVER_ULTRA_DB["settings"][guild_id]
+    return MOHN_SERVER_DATABASE["settings"][guild_id]
+
+def record_guild_audit(guild_id: int, action_text: str):
+    """تسجيل العمليات الإدارية وأحداث النظام الداخلية"""
+    if guild_id not in MOHN_SERVER_DATABASE["audit_logs"]:
+        MOHN_SERVER_DATABASE["audit_logs"][guild_id] = []
+    
+    timestamp_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp_str}] {action_text}"
+    
+    # الاحتفاظ بأخر 50 سجل فقط لتجنب امتلاء الذاكرة
+    MOHN_SERVER_DATABASE["audit_logs"][guild_id].append(log_entry)
+    if len(MOHN_SERVER_DATABASE["audit_logs"][guild_id]) > 50:
+        MOHN_SERVER_DATABASE["audit_logs"][guild_id].pop(0)
 
 # ==============================================================================
-# 🎨 واجهات التحكم الإدارية ولوحة الإعدادات التفاعلية
+# 🎛️ النوافذ التفاعلية (Modals) المتقدمة لتعديل إعدادات اللفلات والرسائل
 # ==============================================================================
-
-class LevelMessageModal(discord.ui.Modal, title="تعديل رسالة الترقية"):
-    message_input = discord.ui.TextInput(
-        label="نص الرسالة الجديدة",
-        placeholder="مثال: كفو {user} صرت لفل {level}!",
+class CustomMessageModal(discord.ui.Modal, title="تعديل رسالة الصعود المخصصة"):
+    msg_box = discord.ui.TextInput(
+        label="اكتب الرسالة (استخدم {user} و {level})",
+        placeholder="مثال: وحش يا {user} صرت لفل {level}!",
         style=discord.TextStyle.paragraph,
-        max_length=1000,
+        max_length=800,
         required=True
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        settings = get_guild_settings(interaction.guild.id)
-        settings["custom_level_message"] = self.message_input.value
-        await interaction.response.send_message(f"✅ تم تحديث رسالة الترقية بنجاح إلى:\n> `{self.message_input.value}`", ephemeral=True)
+        cfg = fetch_guild_config(interaction.guild.id)
+        cfg["level_message"] = self.msg_box.value
+        record_guild_audit(interaction.guild.id, f"Admin {interaction.user} updated level up message template.")
+        await interaction.response.send_message(f"✨ تم تحديث رسالة الترقية بنجاح إلى:\n> `{self.msg_box.value}`", ephemeral=True)
 
 
-class LevelImageModal(discord.ui.Modal, title="تعديل صورة الترقية"):
-    image_input = discord.ui.TextInput(
-        label="رابط الصورة (Image URL)",
-        placeholder="https://example.com/image.png (للازالة اكتب none)",
-        required=True,
-        max_length=500
+class CustomImageModal(discord.ui.Modal, title="تعديل رابط صورة الترقية"):
+    img_box = discord.ui.TextInput(
+        label="رابط الصورة المباشر (أو اكتب none للإزالة)",
+        placeholder="https://imgur.com/...",
+        max_length=400,
+        required=True
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        settings = get_guild_settings(interaction.guild.id)
-        val = self.image_input.value.strip()
+        cfg = fetch_guild_config(interaction.guild.id)
+        val = self.img_box.value.strip()
         if val.lower() == "none":
-            settings["level_image"] = None
-            await interaction.response.send_message("✅ تم إزالة صورة الترقية بنجاح.", ephemeral=True)
+            cfg["level_image"] = None
+            record_guild_audit(interaction.guild.id, f"Admin {interaction.user} removed level up banner image.")
+            await interaction.response.send_message("🗑️ تم إزالة صورة الترقية بنجاح.", ephemeral=True)
         else:
-            settings["level_image"] = val
-            await interaction.response.send_message(f"✅ تم تحديث صورة الترقية بنجاح:\n> `{val}`", ephemeral=True)
+            cfg["level_image"] = val
+            record_guild_audit(interaction.guild.id, f"Admin {interaction.user} updated level up banner image.")
+            await interaction.response.send_message(f"🖼️ تم حفظ صورة الترقية الجديدة بنجاح.", ephemeral=True)
 
 
-class LevelRewardModal(discord.ui.Modal, title="إضافه رتبة لمستوى معين"):
-    level_input = discord.ui.TextInput(
-        label="رقم اللفل المطلوب",
-        placeholder="مثال: 5 أو 10",
-        required=True,
-        max_length=5
+class AddRewardRoleModal(discord.ui.Modal, title="ربط رتبة بمستوى معين"):
+    lvl_box = discord.ui.TextInput(
+        label="رقم المستوى المطلوب",
+        placeholder="مثال: 5، 10، 20",
+        max_length=5,
+        required=True
     )
-    role_input = discord.ui.TextInput(
+    role_box = discord.ui.TextInput(
         label="أيدي الرتبة (Role ID)",
-        placeholder="قم بنسخ أيدي الرتبة هنا",
-        required=True,
-        max_length=30
+        placeholder="قم بلصق أيدي الرتبة هنا",
+        max_length=30,
+        required=True
     )
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            lvl = int(self.level_input.value.strip())
-            role_id = int(self.role_input.value.strip())
+            level_num = int(self.lvl_box.value.strip())
+            role_id = int(self.role_box.value.strip())
         except ValueError:
-            await interaction.response.send_message("❌ تأكد من كتابة أرقام صحيحة للفلفل وأيدي الرتبة!", ephemeral=True)
+            await interaction.response.send_message("❌ يرجى إدخال أرقام صحيحة ومقبولة للمستوى وأيدي الرتبة!", ephemeral=True)
             return
 
-        role = interaction.guild.get_role(role_id)
-        if not role:
-            await interaction.response.send_message("❌ لم يتم العثور على الرتبة بهذا الأيدي في السيرفر!", ephemeral=True)
+        role_obj = interaction.guild.get_role(role_id)
+        if not role_obj:
+            await interaction.response.send_message("❌ لم يتم العثور على رتبة بهذا الأيدي في هذا السيرفر!", ephemeral=True)
             return
 
-        settings = get_guild_settings(interaction.guild.id)
-        settings["role_rewards"][str(lvl)] = role.id
-        await interaction.response.send_message(f"✅ تم ربط اللفل **{lvl}** بالرتبة {role.mention} بنجاح!", ephemeral=True)
+        cfg = fetch_guild_config(interaction.guild.id)
+        cfg["role_rewards"][str(level_num)] = role_obj.id
+        record_guild_audit(interaction.guild.id, f"Admin {interaction.user} linked level {level_num} to role {role_obj.name}.")
+        await interaction.response.send_message(f"🎁 تم بنجاح ربط المستوى **{level_num}** بالرتبة المميزة {role_obj.mention}!", ephemeral=True)
 
 
-class ResetConfigView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=180)
-
-    @discord.ui.select(
-        placeholder="اختر نظام التصفير والريسيت الدوري...",
-        options=[
-            discord.SelectOption(label="إيقاف نظام الريسيت", value="none", description="تعطيل التصفير التلقائي", emoji="⏹"),
-            discord.SelectOption(label="يومي (مرتين في اليوم)", value="daily", description="إرسال تقرير وتنفيذ دورة كل 12 ساعة", emoji="☀️"),
-            discord.SelectOption(label="أسبوعي (مرتين في اليوم طوال الأسبوع)", value="weekly", description="تحديث ومراجعة دورية أسبوعية", emoji="📅"),
-            discord.SelectOption(label="شهري (مرتين في اليوم طوال الشهر)", value="monthly", description="دورة تصفير وإحصائيات شهرية", emoji="🗓️")
-        ]
+class SetMultiplierModal(discord.ui.Modal, title="تحديد مضاعف النقاط (Multiplier)"):
+    mult_box = discord.ui.TextInput(
+        label="قيمة المضاعف (مثال: 1, 2, 3)",
+        placeholder="2",
+        max_length=2,
+        required=True
     )
-    async def select_reset_callback(self, interaction: discord.Interaction, select: discord.ui.Select):
-        settings = get_guild_settings(interaction.guild.id)
-        settings["reset_type"] = select.values[0]
-        await interaction.response.send_message(f"✅ تم تحديث نظام الريسيت الدوري إلى: **{select.values[0].upper()}** بنجاح!", ephemeral=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            val = int(self.mult_box.value.strip())
+            if val < 1 or val > 10:
+                raise ValueError
+        except ValueError:
+            await interaction.response.send_message("❌ يرجى إدخال رقم صحيح للمضاعف بين 1 و 10!", ephemeral=True)
+            return
+
+        cfg = fetch_guild_config(interaction.guild.id)
+        cfg["multiplier"] = val
+        record_guild_audit(interaction.guild.id, f"Admin {interaction.user} changed XP multiplier to {val}x.")
+        await interaction.response.send_message(f"⚡ تم ضبط مضاعف الـ XP في السيرفر ليصبح **{val}x** بنجاح!", ephemeral=True)
 
 
-class LevelAdminPanelView(discord.ui.View):
+# ==============================================================================
+# 🎛️ أزرار لوحة التحكم الإدارية المتقدمة والمطورة بالكامل
+# ==============================================================================
+class MohnAdminPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="تشغيل النظام", style=discord.ButtonStyle.success, emoji="🟢", custom_id="enable_levels_sys")
-    async def enable_sys(self, interaction: discord.Interaction, button: discord.ui.Button):
-        settings = get_guild_settings(interaction.guild.id)
-        settings["status"] = True
-        await interaction.response.send_message("🟢 تم **تشغيل** نظام المستويات بنجاح في السيرفر!", ephemeral=True)
+    @discord.ui.button(label="تشغيل/إيقاف النظام", style=discord.ButtonStyle.blurple, emoji="🔄", custom_id="mohn_toggle_sys_v3")
+    async def toggle_sys(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cfg = fetch_guild_config(interaction.guild.id)
+        cfg["status"] = not cfg["status"]
+        state_str = "مفعّل 🟢" if cfg["status"] else "متوقف 🔴"
+        record_guild_audit(interaction.guild.id, f"Admin {interaction.user} toggled system status to {state_str}.")
+        await interaction.response.send_message(f"⚙️ أصبحت حالة نظام المستويات الآن: **{state_str}**", ephemeral=True)
 
-    @discord.ui.button(label="إيقاف النظام", style=discord.ButtonStyle.danger, emoji="🔴", custom_id="disable_levels_sys")
-    async def disable_sys(self, interaction: discord.Interaction, button: discord.ui.Button):
-        settings = get_guild_settings(interaction.guild.id)
-        settings["status"] = False
-        await interaction.response.send_message("🔴 تم **إيقاف** نظام المستويات مؤقتاً في السيرفر!", ephemeral=True)
-
-    @discord.ui.button(label="تحديد روم الترقية", style=discord.ButtonStyle.primary, emoji="💬", custom_id="set_lvl_chan_btn")
-    async def set_chan(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("💬 يرجى استخدام الأمر `/level_reset_config` لتحديد روم إعلانات الترقية.", ephemeral=True)
-
-    @discord.ui.button(label="تعديل رسالة الترقية", style=discord.ButtonStyle.secondary, emoji="✏️", custom_id="edit_lvl_msg_btn")
+    @discord.ui.button(label="تعديل رسالة الصعود", style=discord.ButtonStyle.secondary, emoji="💬", custom_id="mohn_edit_msg_v3")
     async def edit_msg(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(LevelMessageModal())
+        await interaction.response.send_modal(CustomMessageModal())
 
-    @discord.ui.button(label="تعديل صورة الترقية", style=discord.ButtonStyle.secondary, emoji="🖼️", custom_id="edit_lvl_img_btn")
+    @discord.ui.button(label="تعديل صورة الصعود", style=discord.ButtonStyle.secondary, emoji="🖼️", custom_id="mohn_edit_img_v3")
     async def edit_img(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(LevelImageModal())
+        await interaction.response.send_modal(CustomImageModal())
 
-    @discord.ui.button(label="إضافة مكافأة رتبة", style=discord.ButtonStyle.success, emoji="🎁", custom_id="add_lvl_reward_btn")
+    @discord.ui.button(label="إضافة مكافأة رتبة", style=discord.ButtonStyle.success, emoji="🎁", custom_id="mohn_add_reward_v3")
     async def add_reward(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(LevelRewardModal())
+        await interaction.response.send_modal(AddRewardRoleModal())
 
-    @discord.ui.button(label="إعدادات الريسيت الدوري", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="reset_config_menu_btn")
-    async def reset_config_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("⚙️️ اختر نوع الريسيت الدوري من القائمة أدناه:", view=ResetConfigView(), ephemeral=True)
+    @discord.ui.button(label="ضبط مضاعف الـ XP", style=discord.ButtonStyle.danger, emoji="⚡", custom_id="mohn_set_mult_v3")
+    async def set_mult(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(SetMultiplierModal())
 
 
-class UltimateRankModal(discord.ui.Modal, title="تخصيص بطاقة المستوى الشخصية"):
-    bg_url_input = discord.ui.TextInput(
-        label="رابط صورة الخلفية المخصصة للبطاقة",
-        placeholder="https://imgur.com/...",
-        required=False,
-        max_length=400
-    )
-    color_input = discord.ui.TextInput(
-        label="كود اللون الأساسي للبطاقة (Hex Color)",
+class MohnCardCustomModal(discord.ui.Modal, title="تخصيص بطاقة الرانك الخاصة بك"):
+    color_box = discord.ui.TextInput(
+        label="كود لون البطاقة (Hex Code)",
         placeholder="#5865F2",
         default="#5865F2",
-        required=True,
-        max_length=7
+        max_length=7,
+        required=True
     )
-    status_input = discord.ui.TextInput(
-        label="الحالة الشخصية أو الشعار المكتوب",
-        placeholder="اكتب شعارك المميز هنا...",
-        required=False,
-        max_length=120
+    status_box = discord.ui.TextInput(
+        label="نبذتك الشخصية أو شعارك",
+        placeholder="اكتب شيئاً مميزاً عنك هنا...",
+        max_length=100,
+        required=False
     )
 
     async def on_submit(self, interaction: discord.Interaction):
         uid = interaction.user.id
-        if uid not in SERVER_ULTRA_DB["custom_cards"]:
-            SERVER_ULTRA_DB["custom_cards"][uid] = {}
+        if uid not in MOHN_SERVER_DATABASE["custom_cards"]:
+            MOHN_SERVER_DATABASE["custom_cards"][uid] = {}
         
-        SERVER_ULTRA_DB["custom_cards"][uid]["bg_url"] = self.bg_url_input.value
-        SERVER_ULTRA_DB["custom_cards"][uid]["color"] = self.color_input.value
-        SERVER_ULTRA_DB["custom_cards"][uid]["status"] = self.status_input.value
-        
-        await interaction.response.send_message("✅ تم حفظ وتحديث تخصيص بطاقة المستوى الشخصية الخاصة بك بنجاح تام!", ephemeral=True)
+        MOHN_SERVER_DATABASE["custom_cards"][uid]["color"] = self.color_box.value
+        MOHN_SERVER_DATABASE["custom_cards"][uid]["status"] = self.status_box.value
+        await interaction.response.send_message("✨ تم حفظ تخصيص بطاقتك الشخصية بنجاح تام!", ephemeral=True)
 
 
-class UltimateControlView(discord.ui.View):
+class MohnCardView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="تخصيص البطاقة بالكامل", style=discord.ButtonStyle.primary, emoji="🎨", custom_id="ultra_customize_card_btn_v4")
-    async def customize_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(UltimateRankModal())
-
-    @discord.ui.button(label="استعراض جدول الرتب والمكافآت", style=discord.ButtonStyle.secondary, emoji="🏆", custom_id="ultra_rewards_btn_v4")
-    async def rewards_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        settings = get_guild_settings(interaction.guild.id)
-        rewards = settings.get("role_rewards", {})
-        
-        rewards_text = ""
-        if rewards:
-            for lvl, r_id in sorted(rewards.items(), key=lambda x: int(x[0])):
-                r_obj = interaction.guild.get_role(r_id)
-                r_mention = r_obj.mention if r_obj else f"رتبة محذوفة (`{r_id}`)"
-                rewards_text += f"• **المستوى {lvl}:** {r_mention}\n"
-        else:
-            rewards_text = "لا توجد مكافآت رتب مضافة حالياً."
-
-        embed = discord.Embed(
-            title="دليل رتب ومكافآت التفاعل التلقائية",
-            description=f"مرحباً بك في جدول الرتب الممنوحة عند الارتقاء بالمستويات:\n\n{rewards_text}",
-            color=0x5865F2,
-            timestamp=datetime.datetime.utcnow()
-        )
-        embed.set_footer(text="Z I UO Global Management System ✦ Reward Engine")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+    @discord.ui.button(label="تخصيص بطاقتي", style=discord.ButtonStyle.primary, emoji="🎨", custom_id="mohn_custom_card_btn_v3")
+    async def custom_card(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(MohnCardCustomModal())
 
 
 # ==============================================================================
-# ⚙ محرك الـ Cog الرئيسي والممتد للأنظمة
+# 🚀 محرك التشغيل البرمجي الموسع والمحترف (Listeners & Advanced Loops)
 # ==============================================================================
-class UltimateLevelingSystemCog(commands.Cog):
+class MohnAdvancedLevelSystem(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.scheduled_reset_task.start()
         self.voice_xp_loop.start()
 
     def cog_unload(self):
-        self.scheduled_reset_task.cancel()
         self.voice_xp_loop.cancel()
 
-    @tasks.loop(hours=12)
-    async def scheduled_reset_task(self):
-        now = datetime.datetime.utcnow()
-        for guild_id, settings in SERVER_ULTRA_DB.get("settings", {}).items():
-            if not settings.get("status", True):
-                continue
-            reset_type = settings.get("reset_type")
-            if not reset_type or reset_type == "none":
-                continue
-            
-            target_channel_id = settings.get("announcement_channel")
-            if not target_channel_id:
-                continue
-
-            guild = self.bot.get_guild(guild_id)
-            if not guild:
-                continue
-            
-            channel = guild.get_channel(target_channel_id)
-            if not channel:
-                continue
-
-            try:
-                if reset_type == "daily":
-                    await channel.send("🔄 **[تقرير نظام المستويات اليومي]** ╎ تم تنفيذ دورة التحقق والتقرير اليومية (مرتين يومياً) بنجاح!")
-                elif reset_type == "weekly":
-                    if now.weekday() == 0:
-                        await channel.send("📊 **[تقرير نظام المستويات الأسبوعي]** ╎ فحص ومراجعة تصنيفات المتصدرين الدورية لهذا الأسبوع!")
-                elif reset_type == "monthly":
-                    if now.day == 1:
-                        await channel.send("📊 **[تقرير نظام المستويات الشهري]** ╎ إطلاق الدورة الشهرية الجديدة لنظام التفاعل!")
-            except:
-                pass
-
-    @scheduled_reset_task.before_loop
-    async def before_scheduled_reset(self):
-        await self.bot.wait_until_ready()
-
-    @tasks.loop(minutes=5)
+    # نظام فحص أصوات الأعضاء ومنح XP عشوائي (5 إلى 25) كل دقيقة بدقة فائقة
+    @tasks.loop(minutes=1)
     async def voice_xp_loop(self):
         for guild in self.bot.guilds:
-            guild_id = guild.id
-            settings = get_guild_settings(guild_id)
-            if not settings.get("status", True):
+            gid = guild.id
+            cfg = fetch_guild_config(gid)
+            if not cfg["status"]:
                 continue
             
-            multiplier = settings.get("multiplier", 1)
+            mult = cfg["multiplier"]
 
             for vc in guild.voice_channels:
-                if vc.id in settings.get("ignored_channels", []):
-                    continue
-
                 for member in vc.members:
-                    if member.bot:
+                    if member.bot or member.voice.self_mute or member.voice.self_deaf:
                         continue
                     
-                    if guild_id not in SERVER_ULTRA_DB["users"]:
-                        SERVER_ULTRA_DB["users"][guild_id] = {}
-                    if member.id not in SERVER_ULTRA_DB["users"][guild_id]:
-                        SERVER_ULTRA_DB["users"][guild_id][member.id] = {
+                    if gid not in MOHN_SERVER_DATABASE["users"]:
+                        MOHN_SERVER_DATABASE["users"][gid] = {}
+                    if member.id not in MOHN_SERVER_DATABASE["users"][gid]:
+                        MOHN_SERVER_DATABASE["users"][gid][member.id] = {
                             "xp": 0, "level": 0, "messages": 0, "voice_minutes": 0, "prestige": 0
                         }
 
-                    user_data = SERVER_ULTRA_DB["users"][guild_id][member.id]
+                    udata = MOHN_SERVER_DATABASE["users"][gid][member.id]
+                    udata["voice_minutes"] += 1
                     
-                    if member.voice.self_mute or member.voice.self_deaf or member.voice.mute or member.voice.deaf:
-                        continue
+                    # منح إكس بي صوتي عشوائي بين 5 و 25 مع تطبيق المضاعف
+                    gained = random.randint(5, 25) * mult
+                    udata["xp"] += gained
 
-                    user_data["voice_minutes"] += 5
-                    voice_earned = random.randint(15, 30) * multiplier
-                    user_data["xp"] += voice_earned
+                    # فحص الصعود التلقائي للفويس
+                    await self.check_level_up(member, gid, udata)
 
     @voice_xp_loop.before_loop
-    async def before_voice_xp(self):
+    async def before_voice(self):
         await self.bot.wait_until_ready()
 
+    async def check_level_up(self, member, gid, udata):
+        """دالة مركزية لفحص وتأكيد الارتقاء بالمستوى ومنح الرتب التلقائية"""
+        cfg = fetch_guild_config(gid)
+        req_xp = (udata["level"] + 1) * 250 + (udata["level"] * 110)
+
+        if udata["xp"] >= req_xp:
+            udata["level"] += 1
+            udata["xp"] = 0 # تصفير الباقي للصعود للمستوى التالي
+
+            # فحص مكافآت الرتب التلقائية المرتبطة بهذا المستوى
+            role_rewards = cfg.get("role_rewards", {})
+            assigned_role_id = role_rewards.get(str(udata["level"]))
+            if assigned_role_id:
+                r_target = member.guild.get_role(int(assigned_role_id))
+                if r_target:
+                    try:
+                        await member.add_roles(r_target, reason=f"Mohn Level Engine: Reached level {udata['level']}")
+                    except:
+                        pass
+
+            try:
+                template = cfg.get("level_message", "كفو يا {user}! صرت لفل {level}!")
+                final_text = template.replace("{user}", member.mention).replace("{level}", str(udata["level"]))
+
+                embed = discord.Embed(
+                    title="🎉 ترقية جديدة في مستويات السيرفر!",
+                    description=f"{final_text}\n\n• **المستوى الحالي:** `{udata['level']}`\n• **إجمالي الرسائل:** `{udata['messages']}`",
+                    color=0x00FF88,
+                    timestamp=datetime.datetime.utcnow()
+                )
+                
+                if cfg.get("level_image"):
+                    embed.set_image(url=cfg["level_image"])
+
+                embed.set_footer(text="MOHN Leveling Protocol ✦ نظام الارتقاء التلقائي")
+                
+                chan_id = cfg.get("announcement_channel")
+                target_channel = member.guild.get_channel(chan_id) if chan_id else member.guild.system_channel
+                if target_channel:
+                    await target_channel.send(content=f"🌟 مبروك يا {member.mention}!", embed=embed)
+            except:
+                pass
+
+    # نظام الرسائل مع إكس بي عشوائي (5 إلى 15) وحالات نادرة لعدم احتساب إكس بي لمنع السبام مع كولداون دقيق
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot or not message.guild:
             return
 
-        guild_id = message.guild.id
-        user_id = message.author.id
-        settings = get_guild_settings(guild_id)
+        gid = message.guild.id
+        uid = message.author.id
+        cfg = fetch_guild_config(gid)
 
-        if not settings.get("status", True):
+        if not cfg["status"]:
             return
 
-        if message.channel.id in settings.get("ignored_channels", []):
+        # نظام الكولداون الصارم لمنع السبام (5 ثوانٍ بين الرسائل المحسوبة)
+        now_ts = time.time()
+        cd_dict = MOHN_SERVER_DATABASE["cooldowns"]
+        if gid not in cd_dict:
+            cd_dict[gid] = {}
+        
+        last_time = cd_dict[gid].get(uid, 0)
+        if now_ts - last_time < 5:
+            return
+        cd_dict[gid][uid] = now_ts
+
+        # حالات نادرة جداً (بنسبة عشوائية 15%) لا يتم فيها منح XP لمنع السبام العشوائي والواقعية
+        if random.random() < 0.15:
             return
 
-        if guild_id not in SERVER_ULTRA_DB["users"]:
-            SERVER_ULTRA_DB["users"][guild_id] = {}
-
-        if user_id not in SERVER_ULTRA_DB["users"][guild_id]:
-            SERVER_ULTRA_DB["users"][guild_id][user_id] = {
+        if gid not in MOHN_SERVER_DATABASE["users"]:
+            MOHN_SERVER_DATABASE["users"][gid] = {}
+        if uid not in MOHN_SERVER_DATABASE["users"][gid]:
+            MOHN_SERVER_DATABASE["users"][gid][uid] = {
                 "xp": 0, "level": 0, "messages": 0, "voice_minutes": 0, "prestige": 0
             }
 
-        user_data = SERVER_ULTRA_DB["users"][guild_id][user_id]
-        
-        active_mult = settings.get("multiplier", 1)
-        base_gain = random.randint(15, 25)
-        earned_xp = base_gain * active_mult
+        udata = MOHN_SERVER_DATABASE["users"][gid][uid]
+        mult = cfg["multiplier"]
 
-        user_data["xp"] += earned_xp
-        user_data["messages"] += 1
+        # إكس بي عشوائي بين 5 و 15 حصراً (لا يزيد عن 15 أبداً)
+        gained_xp = random.randint(5, 15) * mult
+        udata["xp"] += gained_xp
+        udata["messages"] += 1
 
-        req_xp = (user_data["level"] + 1) * 350 + (user_data["level"] * 120)
-
-        if user_data["xp"] >= req_xp:
-            user_data["level"] += 1
-            user_data["xp"] = 0
-
-            role_rewards = settings.get("role_rewards", {})
-            reward_role_id = role_rewards.get(str(user_data["level"]))
-            if reward_role_id:
-                r_obj = message.guild.get_role(int(reward_role_id))
-                if r_obj:
-                    try:
-                        await message.author.add_roles(r_obj, reason=f"Level Reward: Reached level {user_data['level']}")
-                    except:
-                        pass
-
-            try:
-                raw_msg_template = settings.get("custom_level_message", "أهلاً بك يا {user}، لقد صعدت بنجاح إلى المستوى {level}!")
-                formatted_msg = raw_msg_template.replace("{user}", message.author.mention).replace("{level}", str(user_data["level"])).replace("{messages}", str(user_data["messages"]))
-
-                up_embed = discord.Embed(
-                    title="ترقية جديدة وصعود في مستويات السيرفر!",
-                    description=(
-                        f"{formatted_msg}\n\n"
-                        f"• **المستوى المحقق:** `{user_data['level']}`\n"
-                        f"• **إجمالي الرسائل:** `{user_data['messages']}` رسالة\n"
-                    ),
-                    color=0x00FF99,
-                    timestamp=datetime.datetime.utcnow()
-                )
-                
-                custom_img = settings.get("level_image")
-                if custom_img:
-                    up_embed.set_image(url=custom_img)
-
-                up_embed.set_footer(text="Z I UO Enterprise Advanced Leveling Engine")
-                
-                target_chan_id = settings.get("announcement_channel")
-                target_chan = message.guild.get_channel(target_chan_id) if target_chan_id else message.channel
-                await target_chan.send(content=f"🎯 ممتاز يا {message.author.mention}!", embed=up_embed)
-            except:
-                pass
+        await self.check_level_up(message.author, gid, udata)
 
     # ==========================================================================
-    # 🚀 الأوامر (Slash Commands)
+    # ⚙️ الأوامر الرئيسية الموسعة (Slash Commands)
     # ==========================================================================
 
-    @app_commands.command(name="levels_panel", description="[لوحة التحكم] عرض لوحة إعدادات نظام اللفلات الكاملة مع الأزرار التفاعلية")
+    @app_commands.command(name="levels_panel", description="[الإدارة] لوحة التحكم الكاملة والمتقدمة لإدارة نظام الليفلات بالكامل")
     @app_commands.checks.has_permissions(administrator=True)
-    async def levels_panel(self, interaction: discord.Interaction):
-        settings = get_guild_settings(interaction.guild.id)
-        
-        status_text = "🟢 مفعّل" if settings.get("status", True) else "🔴 مقفل"
-        chan_obj = interaction.guild.get_channel(settings.get("announcement_channel"))
-        chan_str = chan_obj.mention if chan_obj else "غير محدد ❌"
-        
-        rewards_count = len(settings.get("role_rewards", {}))
-        rewards_str = f"{rewards_count} رتب مكافأة مضافة" if rewards_count > 0 else "لا توجد مكافآت مضافة"
-        
-        custom_img = settings.get("level_image")
-        img_str = "مفعلة ✅" if custom_img else "غير مفعلة ❌"
-        
-        msg_template = settings.get("custom_level_message", "افتراضي")
+    async def levels_panel(self, interaction: discord.Interaction, announcement_channel: discord.TextChannel = None):
+        cfg = fetch_guild_config(interaction.guild.id)
+        if announcement_channel:
+            cfg["announcement_channel"] = announcement_channel.id
+
+        status_str = "مفعّل 🟢" if cfg["status"] else "متوقف 🔴"
+        chan_display = announcement_channel.mention if announcement_channel else (interaction.guild.get_channel(cfg["announcement_channel"]).mention if cfg["announcement_channel"] else "روم الرسالة الحالية 💬")
+        rewards_count = len(cfg["role_rewards"])
 
         embed = discord.Embed(
-            title="🏆 إعداد نظام اللفلات",
+            title="⚙️ لوحة تحكم نظام المستويات الاحترافية - MOHN",
             description=(
-                "من هنا يمكنك التحكم بالكامل بنظام اللفلات، الرومات، الرتب والمكافآت.\n\n"
-                f"• **حالة النظام:**\n{status_text}\n"
-                f"• **روم الترقية:**\n{chan_str}\n"
-                f"• **صورة الترقية:**\n{img_str}\n"
-                f"• **مكافآت الرتب:**\n{rewards_str}\n"
-                f"• **رسالة الترقية:**\n{msg_template}\n\n"
-                "إعدادات مستقلة لهذا السيرفر ✦ ZIUO - MC"
+                "مرحباً بك في لوحة الإدارة المركزية لنظام التفاعل واللفلات.\n"
+                "يمكنك التحكم بكافة الخصائص عبر الأزرار التفاعلية أدناه:\n\n"
+                f"• **حالة النظام:** {status_str}\n"
+                f"• **روم إعلانات الترقية:** {chan_display}\n"
+                f"• **مضاعف النقاط الحالي:** `{cfg['multiplier']}x` ⚡\n"
+                f"• **عدد رتب المكافآت المضافة:** `{rewards_count}` رتبة\n"
+                f"• **الرسالة الحالية:** `{cfg['level_message']}`"
             ),
-            color=0x2b2d31,
+            color=0x2B2D31,
             timestamp=datetime.datetime.utcnow()
         )
-        
-        await interaction.response.send_message(embed=embed, view=LevelAdminPanelView(), ephemeral=True)
+        embed.set_footer(text="MOHN Admin Core ✦ Powered for Server Management")
+        await interaction.response.send_message(embed=embed, view=MohnAdminPanelView(), ephemeral=True)
 
-    @app_commands.command(name="level", description="استعراض بطاقة الرانك والمستوى الاحترافية والكاملة لأي عضو في السيرفر")
-    @app_commands.describe(member="العضو المراد الكشف عن رانكه")
+    @app_commands.command(name="level", description="استعراض بطاقة الرانك والمستوى الاحترافية الخاصة بك أو بأي عضو")
+    @app_commands.describe(member="العضو المراد الكشف عن مستواه")
     async def level(self, interaction: discord.Interaction, member: discord.Member = None):
         target = member or interaction.user
-        guild_id = interaction.guild.id
+        gid = interaction.guild.id
 
-        guild_users = SERVER_ULTRA_DB["users"].get(guild_id, {})
-        user_data = guild_users.get(target.id, {"xp": 0, "level": 0, "messages": 0, "voice_minutes": 0, "prestige": 0})
+        users_data = MOHN_SERVER_DATABASE["users"].get(gid, {})
+        udata = users_data.get(target.id, {"xp": 0, "level": 0, "messages": 0, "voice_minutes": 0, "prestige": 0})
         
-        custom_conf = SERVER_ULTRA_DB["custom_cards"].get(target.id, {})
-        color_hex = custom_conf.get("color", "#5865F2")
+        card_conf = MOHN_SERVER_DATABASE["custom_cards"].get(target.id, {})
+        hex_color = card_conf.get("color", "#5865F2")
         try:
-            color_int = int(color_hex.replace("#", ""), 16)
+            color_val = int(hex_color.replace("#", ""), 16)
         except:
-            color_int = 0x5865F2
+            color_val = 0x5865F2
 
-        req_xp = (user_data["level"] + 1) * 350 + (user_data["level"] * 120)
+        req_xp = (udata["level"] + 1) * 250 + (udata["level"] * 110)
 
         embed = discord.Embed(
-            title=f"📊 بطاقة المستوى والخبرة - {target.display_name}",
+            title=f"📊 بطاقة إحصائيات المستوى - {target.display_name}",
             description=(
-                f"إليك كافة الإحصائيات الشاملة لسجل تفاعلك ونشاطك داخل السيرفر:\n\n"
-                f"• **المستوى الحالي (Level):** `{user_data['level']}`\n"
-                f"• **نقاط الخبرة (XP):** `{user_data['xp']} / {req_xp}` 🌟\n"
-                f"• **عدد الرسائل النصية:** `{user_data['messages']}` رسالة 📝\n"
-                f"• **دقائق التواجد الصوتي:** `{user_data['voice_minutes']}` دقيقة 🔊\n"
-                f"• **الحالة الشخصية:** `{custom_conf.get('status', 'لا توجد حالة مضافة')}`"
+                f"سجل التفاعل والنشاط الكامل:\n\n"
+                f"• **المستوى الحالي:** `{udata['level']}` 🏆\n"
+                f"• **نقاط الخبرة (XP):** `{udata['xp']} / {req_xp}` 🌟\n"
+                f"• **الرسائل المرسلة:** `{udata['messages']}` رسالة 📝\n"
+                f"• **الوقت الصوتي:** `{udata['voice_minutes']}` دقيقة 🔊\n"
+                f"• **مستوى البريستيج:** `{udata.get('prestige', 0)}` ✨\n"
+                f"• **النبذة الشخصية:** `{card_conf.get('status', 'لا توجد نبذة مضافة')}`"
             ),
-            color=color_int,
+            color=color_val,
             timestamp=datetime.datetime.utcnow()
         )
-
-        if custom_conf.get("bg_url"):
-            embed.set_image(url=custom_conf["bg_url"])
-
         embed.set_thumbnail(url=target.display_avatar.url)
-        embed.set_footer(text="Z I UO Ultimate Rank System ✦ 2026 Edition")
+        embed.set_footer(text="MOHN Rank System ✦ بطاقة العضو النشط")
+        
+        await interaction.response.send_message(embed=embed, view=MohnCardView(), ephemeral=False)
 
-        await interaction.response.send_message(embed=embed, view=UltimateControlView(), ephemeral=False)
-
-    @app_commands.command(name="top", description="عرض لوحة الشرف الكبرى لأعلى 10 أعضاء متصدرين في السيرفر مع ترتيبك الشخصي")
+    @app_commands.command(name="top", description="عرض لوحة شرف المتصدرين لأعلى 10 أعضاء في السيرفر مع ترتيبك الشخصي")
     async def top(self, interaction: discord.Interaction):
-        guild_id = interaction.guild.id
-        guild_users = SERVER_ULTRA_DB["users"].get(guild_id, {})
+        gid = interaction.guild.id
+        users_data = MOHN_SERVER_DATABASE["users"].get(gid, {})
 
-        if not guild_users:
-            await interaction.response.send_message("❌ لا توجد أي بيانات مسجلة في نظام المستويات حتى هذه اللحظة!", ephemeral=True)
+        if not users_data:
+            await interaction.response.send_message("❌ لا توجد أي بيانات تفاعل مسجلة في النظام حتى الآن!", ephemeral=True)
             return
 
-        # ترتيب جميع الأعضاء تنازلياً حسب المستوى ثم الـ XP
-        sorted_users = sorted(guild_users.items(), key=lambda x: (x[1]["level"], x[1]["xp"]), reverse=True)
+        sorted_members = sorted(users_data.items(), key=lambda x: (x[1]["level"], x[1]["xp"]), reverse=True)
+        top_ten = sorted_members[:10]
 
-        # تجهيز أفضل 10 أعضاء
-        top_10 = sorted_users[:10]
-        ranking_lines = []
-
-        for index, (uid, data) in enumerate(top_10, start=1):
-            member_obj = interaction.guild.get_member(uid)
-            display_name = member_obj.mention if member_obj else f"عضو مغادر (`{uid}`)"
+        lines = []
+        for rank_idx, (uid, udata) in enumerate(top_ten, start=1):
+            m_obj = interaction.guild.get_member(uid)
+            name_str = m_obj.mention if m_obj else f"عضو مغادر (`{uid}`)"
             
-            medal_icon = "👑" if index == 1 else "🥈" if index == 2 else "🥉" if index == 3 else f"`#{index}`"
-            ranking_lines.append(
-                f"{medal_icon} ╎ {display_name}\n"
-                f" ┗ المستوى: **{data['level']}** | XP: **{data['xp']}** | الرسائل: **{data['messages']}**\n"
+            badge = "👑" if rank_idx == 1 else "🥈" if rank_idx == 2 else "🥉" if rank_idx == 3 else f"`#{rank_idx}`"
+            lines.append(
+                f"{badge} ╎ {name_str}\n"
+                f" ┗ المستوى: **{udata['level']}** | XP: **{udata['xp']}** | الرسائل: **{udata['messages']}**\n"
             )
 
         embed = discord.Embed(
-            title="🏆 لوحة شرف المتصدرين الكبرى - Z I UO",
-            description=(
-                "قائمة بأبرز 10 أعضاء الأكثر نشاطاً وتفاعلاً على مستوى السيرفر:\n\n" +
-                "\n".join(ranking_lines)
-            ),
+            title="🏆 لوحة شرف المتصدرين الكبرى - MOHN Rankings",
+            description="أبرز 10 أعضاء الأكثر تفاعلاً ونشاطاً في السيرفر:\n\n" + "\n".join(lines),
             color=0xFFD700,
             timestamp=datetime.datetime.utcnow()
         )
 
-        # البحث عن ترتيب المستخدم الحالي إذا لم يكن ضمن الـ Top 10
-        user_id = interaction.user.id
-        user_rank = None
-        user_data = None
+        current_uid = interaction.user.id
+        user_rank_pos = None
+        user_record = None
 
-        for idx, (uid, data) in enumerate(sorted_users, start=1):
-            if uid == user_id:
-                user_rank = idx
-                user_data = data
+        for pos, (uid, udata) in enumerate(sorted_members, start=1):
+            if uid == current_uid:
+                user_rank_pos = pos
+                user_record = udata
                 break
 
-        if user_rank and user_rank > 10:
-            if not user_data:
-                user_data = guild_users.get(user_id, {"xp": 0, "level": 0, "messages": 0})
+        if user_rank_pos and user_rank_pos > 10:
+            if not user_record:
+                user_record = users_data.get(current_uid, {"xp": 0, "level": 0, "messages": 0})
             
-            # جلب مكافأة الرتبة الحالية لو وجدت
-            settings = get_guild_settings(guild_id)
-            role_rewards = settings.get("role_rewards", {})
-            reward_role_id = role_rewards.get(str(user_data["level"]))
-            role_str = ""
+            cfg = fetch_guild_config(gid)
+            r_rewards = cfg.get("role_rewards", {})
+            reward_role_id = r_rewards.get(str(user_record["level"]))
+            role_mention_str = ""
             if reward_role_id:
-                r_obj = interaction.guild.get_role(int(reward_role_id))
-                if r_obj:
-                    role_str = f" | المكافأة: {r_obj.mention}"
+                r_found = interaction.guild.get_role(int(reward_role_id))
+                if r_found:
+                    role_mention_str = f" | الرتبة: {r_found.mention}"
 
             embed.add_field(
-                name="📌 ترتيبك الشخصي في السيرفر",
+                name="📌 مركزك وترتيبك الشخصي",
                 value=(
-                    f"• **المركز:** `#{user_rank}`\n"
-                    f"• **العضو:** {interaction.user.mention}\n"
-                    f"• **المستوى:** `{user_data['level']}` | **XP:** `{user_data['xp']}`{role_str}"
+                    f"• **الترتيب:** `#{user_rank_pos}` من الأعضاء\n"
+                    f"• **المستوى:** `{user_record['level']}` | **XP:** `{user_record['xp']}`{role_mention_str}"
                 ),
                 inline=False
             )
-        elif user_rank and user_rank <= 10:
-            embed.set_footer(text=f"أنت ضمن قائمة العشرة الأوائل! ترتيبك الحالي هو #{user_rank} 🌟")
+        elif user_rank_pos and user_rank_pos <= 10:
+            embed.set_footer(text=f"أنت في المركز #{user_rank_pos} ضمن قائمة العشرة الأوائل! استمر 🌟")
         else:
             embed.add_field(
-                name="📌 ترتيبك الشخصي في السيرفر",
-                value="ليس لديك تفاعل مسجل حتى الآن، ابدأ بالمشاركة لتظهر في القائمة!",
+                name="📌 مركزك وترتيبك الشخصي",
+                value="ليس لديك تفاعل مسجل بعد، ابدأ بالمشاركة في الرومات لتظهر في لوحة الشرف!",
                 inline=False
             )
 
         if not embed.footer.text:
-            embed.set_footer(text="Z I UO Global Leaderboard System ✦ Ultimate Analytics")
+            embed.set_footer(text="MOHN Leaderboard System ✦ All Rights Reserved")
 
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    @app_commands.command(name="level_reset_config", description="[إدارة] ضبط روم الإعلانات ونظام الريسيت الدوري ومضاعفات النقاط")
-    @app_commands.choices(reset_type=[
-        app_commands.Choice(name="يومي (مرتين في اليوم)", value="daily"),
-        app_commands.Choice(name="أسبوعي (مرتين في اليوم طوال الأسبوع)", value="weekly"),
-        app_commands.Choice(name="شهري (مرتين في اليوم طوال الشهر)", value="monthly"),
-        app_commands.Choice(name="إيقاف نظام الريسيت", value="none")
+    @app_commands.command(name="level_manage", description="[الإدارة] إضافة أو إزالة نقاط أو لفلات لأي عضو في السيرفر")
+    @app_commands.describe(member="العضو المستهدف", action="إضافة أو خصم", amount="قيمة النقاط أو اللفلات")
+    @app_commands.choices(action=[
+        app_commands.Choice(name="إضافة XP", value="add_xp"),
+        app_commands.Choice(name="خصم XP", value="remove_xp"),
+        app_commands.Choice(name="تعيين مستوى", value="set_level")
     ])
     @app_commands.checks.has_permissions(administrator=True)
-    async def level_reset_config(
-        self, 
-        interaction: discord.Interaction, 
-        reset_type: str, 
-        multiplier_value: int = 1, 
-        announcement_channel: discord.TextChannel = None
-    ):
-        settings = get_guild_settings(interaction.guild.id)
-        settings["reset_type"] = reset_type
-        settings["multiplier"] = multiplier_value
-        if announcement_channel:
-            settings["announcement_channel"] = announcement_channel.id
+    async def level_manage(self, interaction: discord.Interaction, member: discord.Member, action: str, amount: int):
+        gid = interaction.guild.id
+        if gid not in MOHN_SERVER_DATABASE["users"]:
+            MOHN_SERVER_DATABASE["users"][gid] = {}
+        if member.id not in MOHN_SERVER_DATABASE["users"][gid]:
+            MOHN_SERVER_DATABASE["users"][gid][member.id] = {
+                "xp": 0, "level": 0, "messages": 0, "voice_minutes": 0, "prestige": 0
+            }
 
-        await interaction.response.send_message(
-            f"✅ تم تحديث إعدادات نظام المستويات والإعلانات بنجاح تام!\n"
-            f"• **نوع الريسيت المجدول:** `{reset_type.upper()}`\n"
-            f"• **معامل المضاعف:** `{multiplier_value}x`\n"
-            f"• **روم إعلانات الترقية:** {announcement_channel.mention if announcement_channel else 'الحالي'}",
-            ephemeral=True
+        udata = MOHN_SERVER_DATABASE["users"][gid][member.id]
+
+        if action == "add_xp":
+            udata["xp"] += amount
+            record_guild_audit(gid, f"Admin {interaction.user} added {amount} XP to {member}.")
+            await interaction.response.send_message(f"✅ تمت إضافة `{amount} XP` بنجاح للعضو {member.mention}!", ephemeral=True)
+        elif action == "remove_xp":
+            udata["xp"] = max(0, udata["xp"] - amount)
+            record_guild_audit(gid, f"Admin {interaction.user} removed {amount} XP from {member}.")
+            await interaction.response.send_message(f"✅ تم خصم `{amount} XP` بنجاح من العضو {member.mention}!", ephemeral=True)
+        elif action == "set_level":
+            udata["level"] = max(0, amount)
+            udata["xp"] = 0
+            record_guild_audit(gid, f"Admin {interaction.user} set level of {member} to {amount}.")
+            await interaction.response.send_message(f"✅ تم تغيير مستوى العضو {member.mention} إلى المستوى `{amount}` بنجاح!", ephemeral=True)
+
+    @app_commands.command(name="server_stats", description="عرض إحصائيات عامة حول نشاط نظام الليفلات والسيرفر")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def server_stats(self, interaction: discord.Interaction):
+        gid = interaction.guild.id
+        users_data = MOHN_SERVER_DATABASE["users"].get(gid, {})
+        
+        total_tracked_users = len(users_data)
+        total_messages_all = sum(u.get("messages", 0) for u in users_data.values())
+        total_voice_all = sum(u.get("voice_minutes", 0) for u in users_data.values())
+        
+        cfg = fetch_guild_config(gid)
+        
+        embed = discord.Embed(
+            title="📈 إحصائيات ونشاط نظام المستويات - MOHN Analytics",
+            description=(
+                "نظرة عامة على بيانات التفاعل داخل السيرفر:\n\n"
+                f"• **إجمالي الأعضاء النشطين في النظام:** `{total_tracked_users}` عضو\n"
+                f"• **إجمالي الرسائل المحتسبة:** `{total_messages_all}` رسالة\n"
+                f"• **إجمالي دقائق التواجد الصوتي:** `{total_voice_all}` دقيقة\n"
+                f"• **حالة مضاعف النقاط:** `{cfg['multiplier']}x`\n"
+                f"• **عدد رتب المكافآت:** `{len(cfg['role_rewards'])}` رتبة مجهزة"
+            ),
+            color=0x00AE86,
+            timestamp=datetime.datetime.utcnow()
         )
+        embed.set_footer(text="MOHN System Monitoring ✦ Analytics Engine")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot):
-    await bot.add_cog(UltimateLevelingSystemCog(bot))
+    await bot.add_cog(MohnAdvancedLevelSystem(bot))
