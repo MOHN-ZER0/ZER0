@@ -5,7 +5,7 @@ import datetime
 from typing import Optional, Literal
 
 # ==============================================================================
-# 🌟 إعدادات وقاعدة بيانات نظام الترحيب والمغادرة المحصن (Enterprise Safe Core)
+# 🌟 إعدادات وقاعدة بيانات نظام الترحيب والمغادرة (Enterprise Safe Core)
 # ==============================================================================
 MEGA_WELCOME_CONFIG = {
     "welcome_enabled": True,
@@ -112,14 +112,14 @@ class MegaWelcomeSystemCog(commands.Cog):
             try:
                 MEGA_SERVER_INVITES_CACHE[guild.id] = await guild.invites()
             except Exception as e:
-                print(f"[CACHE LOAD ERROR for {guild.name}]: {e}")
+                print(f"[CACHE LOAD ERROR]: {e}")
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild):
         try:
             MEGA_SERVER_INVITES_CACHE[guild.id] = await guild.invites()
         except Exception as e:
-            print(f"[GUILD JOIN INVITES ERROR]: {e}")
+            print(f"[GUILD JOIN ERROR]: {e}")
 
     @app_commands.command(
         name="welcome",
@@ -163,13 +163,17 @@ class MegaWelcomeSystemCog(commands.Cog):
                 MEGA_WELCOME_CONFIG["autorole_id"] = autorole.id
                 MEGA_WELCOME_CONFIG["autorole_enabled"] = True
 
+            wch = MEGA_WELCOME_CONFIG["welcome_channel_id"]
+            lch = MEGA_WELCOME_CONFIG["leave_channel_id"]
+            arh = MEGA_WELCOME_CONFIG["autorole_id"]
+            
             embed = discord.Embed(
                 title="⚡ ╎ لـوحـة تـحـكـم الـتـرحـيـب والـمـغـادرة الإمبراطورية 〣",
                 description=(
                     f"> إدارة شاملة ومتقدمة لإمبراطورية ZIUO:\n\n"
-                    f"📥 **روم الترحيب:** {f'<#{MEGA_WELCOME_CONFIG[\"welcome_channel_id\"]}>' if MEGA_WELCOME_CONFIG['welcome_channel_id'] else '`غير محدد ❌`'}\n"
-                    f"📤 **روم المغادرة:** {f'<#{MEGA_WELCOME_CONFIG[\"leave_channel_id\"]}>' if MEGA_WELCOME_CONFIG['leave_channel_id'] else '`غير محدد ❌`'}\n"
-                    f"🛡️ **الرتبة التلقائية:** {f'<@&{MEGA_WELCOME_CONFIG[\"autorole_id\"]}>' if MEGA_WELCOME_CONFIG['autorole_enabled'] and MEGA_WELCOME_CONFIG['autorole_id'] else '`معطلة ❌`'}\n"
+                    f"📥 **روم الترحيب:** {f'<#{wch}>' if wch else '`غير محدد ❌`'}\n"
+                    f"📤 **روم المغادرة:** {f'<#{lch}>' if lch else '`غير محدد ❌`'}\n"
+                    f"🛡️ **الرتبة التلقائية:** {f'<@&{arh}>' if MEGA_WELCOME_CONFIG['autorole_enabled'] and arh else '`معطلة ❌`'}\n"
                     f"🖼️ **صورة البطاقة:** [معاينة الرابط]({MEGA_WELCOME_CONFIG['card_image_url']})\n\n"
                     "💡 **طريقة التعديل الحر:** استخدم الأمر `/welcome` واختار نوع التعديل (`set_welcome` مثلاً) واكتب النص المطلوب في خانة `custom_text`!\n"
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -254,10 +258,8 @@ class MegaWelcomeSystemCog(commands.Cog):
                 .replace("[accountCreated]", member.created_at.strftime("%Y-%m-%d"))
         )
 
-    # 📥 حدث دخول العضو (محصن بالكامل ضد الانهيار)
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        # 1. الرتبة التلقائية
         if MEGA_WELCOME_CONFIG["autorole_enabled"] and MEGA_WELCOME_CONFIG["autorole_id"]:
             try:
                 role = member.guild.get_role(MEGA_WELCOME_CONFIG["autorole_id"])
@@ -266,7 +268,6 @@ class MegaWelcomeSystemCog(commands.Cog):
             except Exception as e:
                 print(f"[AUTOROLE ERROR]: {e}")
 
-        # 2. رسالة الخاص
         if MEGA_WELCOME_CONFIG["dm_welcome_enabled"]:
             try:
                 dm_text = MEGA_WELCOME_CONFIG["dm_message"].replace("[userName]", member.name).replace("[server]", member.guild.name)
@@ -274,7 +275,6 @@ class MegaWelcomeSystemCog(commands.Cog):
             except Exception:
                 pass
 
-        # 3. التحقق من تفعيل الترحيب وروم الترحيب
         if not MEGA_WELCOME_CONFIG["welcome_enabled"]:
             return
 
@@ -289,7 +289,6 @@ class MegaWelcomeSystemCog(commands.Cog):
         inviter_name = "رابط دعوة عامة / غير معروف"
         invites_count = 0
         
-        # محاولة تتبع الدعوات بشكل آمن تماماً (لن يوقف النظام لو فشل)
         try:
             old_invites = MEGA_SERVER_INVITES_CACHE.get(member.guild.id, [])
             new_invites = await member.guild.invites()
@@ -303,7 +302,7 @@ class MegaWelcomeSystemCog(commands.Cog):
                             invites_count = sum(inv.uses for inv in new_invites if inv.inviter and inv.inviter.id == new_inv.inviter.id)
                         break
         except Exception as e:
-            print(f"[INVITE TRACKER SAFE BYPASS]: {e}")
+            print(f"[INVITE TRACKER ERROR]: {e}")
 
         formatted_msg = self.format_text(MEGA_WELCOME_CONFIG["welcome_message"], member, inviter_name, invites_count)
 
@@ -321,9 +320,8 @@ class MegaWelcomeSystemCog(commands.Cog):
         except Exception as e:
             print(f"[WELCOME SEND ERROR]: {e}")
 
-    # 📤 حدث مغادرة العضو
     @commands.Cog.listener()
-    async def on_member_remove(self, member: discord.Member):
+    async def on_member_remove(self, member: discord.Message | discord.Member):
         if not MEGA_WELCOME_CONFIG["leave_enabled"]:
             return
 
