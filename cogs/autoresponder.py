@@ -28,19 +28,25 @@ class EnterpriseAutoResponderCog(commands.Cog):
         self.responses = load_mega_responses()
 
     @app_commands.command(
-        name="ar_add_advanced",
-        description="[نظام خارق] إضافة قاعدة رد تلقائي مع خيارات الـ Embed، الحذف التلقائي للرسائل، والتحكم الكامل"
+        name="ar",
+        description="[نظام إمبراطوري موحد] إدارة قواعد الرد التلقائي بالكامل (إضافة، حذف، استعراض)"
     )
     @app_commands.describe(
+        action="الإجراء المطلوب تنفيذه على النظام",
         keyword="الكلمة أو العبارة المفتاحية المستهدفة",
         reply_text="نص الرد (يدعم [user], [userName], [server], [memberCount])",
-        match_type="طريقة المطابقة: exact (تامة), contains (ضمنية), startswith (البداية)",
-        mode="طريقة الإرسال: reply (رد بريلاي), normal (رسالة عادية)",
-        message_type="شكل الرد: embed (قالب فخم), text (نص عادي)",
+        match_type="طريقة المطابقة للكلمة",
+        mode="طريقة إرسال الرد (Reply أو رسالة عادية)",
+        message_type="شكل الرد (قالب إمبد فخم أو نص عادي)",
         delete_user_msg="حذف رسالة العضو الأصلية تلقائياً؟ (True/False)",
-        delete_after_seconds="حذف رد البوت تلقائياً بعد (بالثواني) أو اتركه فارغاً أو 0 ليبقى دائماً"
+        delete_after_seconds="حذف رد البوت بعد ثوانٍ محددة (اختياري)"
     )
     @app_commands.choices(
+        action=[
+            app_commands.Choice(name="إضافة قاعدة جديدة (Add)", value="add"),
+            app_commands.Choice(name="حذف قاعدة مسجلة (Remove)", value="remove"),
+            app_commands.Choice(name="استعراض كافة القواعد (List)", value="list")
+        ],
         match_type=[
             app_commands.Choice(name="مطابقة تامة حصرياً (Exact)", value="exact"),
             app_commands.Choice(name="احتواء ضمني في أي مكان (Contains)", value="contains"),
@@ -48,7 +54,7 @@ class EnterpriseAutoResponderCog(commands.Cog):
         ],
         mode=[
             app_commands.Choice(name="رد مباشر على الرسالة (Reply)", value="reply"),
-            app_choices_normal=app_commands.Choice(name="رسالة عادية في الروم (Normal)", value="normal")
+            app_commands.Choice(name="رسالة عادية في الروم (Normal)", value="normal")
         ],
         message_type=[
             app_commands.Choice(name="قالب إمبد احترافي (Embed)", value="embed"),
@@ -56,11 +62,12 @@ class EnterpriseAutoResponderCog(commands.Cog):
         ]
     )
     @app_commands.checks.has_permissions(administrator=True)
-    async def ar_add_advanced(
+    async def ar_manager(
         self,
         interaction: discord.Interaction,
-        keyword: str,
-        reply_text: str,
+        action: Literal["add", "remove", "list"],
+        keyword: Optional[str] = None,
+        reply_text: Optional[str] = None,
         match_type: Literal["exact", "contains", "startswith"] = "contains",
         mode: Literal["reply", "normal"] = "reply",
         message_type: Literal["embed", "text"] = "embed",
@@ -68,56 +75,85 @@ class EnterpriseAutoResponderCog(commands.Cog):
         delete_after_seconds: Optional[int] = None
     ):
         guild_id = str(interaction.guild.id)
-        clean_keyword = keyword.lower().strip()
-
         if guild_id not in self.responses:
             self.responses[guild_id] = {}
 
-        self.responses[guild_id][clean_keyword] = {
-            "reply": reply_text,
-            "match_type": match_type,
-            "mode": mode,
-            "message_type": message_type,
-            "delete_user_msg": delete_user_msg,
-            "delete_after_seconds": delete_after_seconds,
-            "uses_count": 0,
-            "author_id": interaction.user.id,
-            "created_at": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-        }
-        save_mega_responses(self.responses)
+        # 1. استعراض القواعد (List)
+        if action == "list":
+            if not self.responses[guild_id]:
+                await interaction.response.send_message("📌 **لا توجد أي قواعد رد تلقائي مسجلة في هذا السيرفر حالياً.**", ephemeral=True)
+                return
 
-        embed = discord.Embed(
-            title="⚡ ╎ تـم إضـافـة قـاعـدة الـرد الـتـلـقـائـي بنجاح تام",
-            description=(
-                f"> 🔑 **الكلمة:** `{clean_keyword}`\n"
-                f"> 🔍 **المطابقة:** `{match_type}` | **الإرسال:** `{mode}`\n"
-                f"> 🎨 **النوع:** `{message_type}`\n"
-                f"> 🗑️ **حذف رسالة العضو:** `{'مفعل ✅' if delete_user_msg else 'معطل ❌'}`\n"
-                f"> ⏳ **حذف رد البوت بعد:** `{f'{delete_after_seconds} ثانية' if delete_after_seconds else 'لا يحذف (دائم)'}`\n\n"
-                f"> 📄 **نص الرد:**\n{reply_text}"
-            ),
-            color=0x2ECC71,
-            timestamp=datetime.datetime.utcnow()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed = discord.Embed(
+                title="📋 ╎ قـائـمـة قـواعـد الـرد الـتـلـقـائـي الإمبراطورية",
+                color=0x2B2D31,
+                timestamp=datetime.datetime.utcnow()
+            )
+            for kw, data in self.responses[guild_id].items():
+                embed.add_field(
+                    name=f"🔑 الكلمة: `{kw}`",
+                    value=(
+                        f"> 🔍 المطابقة: `{data['match_type']}` | النوع: `{data['message_type']}`\n"
+                        f"> 🔄 عدد الاستخدامات: `{data.get('uses_count', 0)}`\n"
+                        f"> 📄 الرد: `{data['reply'][:50]}...`"
+                    ),
+                    inline=False
+                )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
 
-    @app_commands.command(
-        name="ar_remove",
-        description="[إدارة حرة] حذف قاعدة رد تلقائي مسجلة بالكلمة المفتاحية فوراً"
-    )
-    @app_commands.describe(keyword="الكلمة المفتاحية المراد إزالتها")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def ar_remove(self, interaction: discord.Interaction, keyword: str):
-        guild_id = str(interaction.guild.id)
+        # التحقق من وجود الكلمة لعمليات الإضافة أو الحذف
+        if not keyword:
+            await interaction.response.send_message("❌ **يجب تحديد الكلمة المفتاحية (`keyword`) لإتمام هذا الإجراء!**", ephemeral=True)
+            return
+
         clean_keyword = keyword.lower().strip()
 
-        if guild_id in self.responses and clean_keyword in self.responses[guild_id]:
-            del self.responses[guild_id][clean_keyword]
-            save_mega_responses(self.responses)
-            await interaction.response.send_message(f"🗑️ **تم بنجاح الحذف النهائي لقاعدة الرد المرتبطة بـ:** `{clean_keyword}`", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"❌ **عذراً، لم يتم العثور على قاعدة مسجلة بهذا الاسم:** `{clean_keyword}`", ephemeral=True)
+        # 2. حذف قاعدة (Remove)
+        if action == "remove":
+            if clean_keyword in self.responses[guild_id]:
+                del self.responses[guild_id][clean_keyword]
+                save_mega_responses(self.responses)
+                await interaction.response.send_message(f"🗑️ **تم بنجاح الحذف النهائي لقاعدة الرد المرتبطة بـ:** `{clean_keyword}`", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"❌ **عذراً، لم يتم العثور على قاعدة مسجلة بهذا الاسم:** `{clean_keyword}`", ephemeral=True)
+            return
 
+        # 3. إضافة قاعدة جديدة (Add)
+        if action == "add":
+            if not reply_text:
+                await interaction.response.send_message("❌ **يجب كتابة نص الرد (`reply_text`) عند إضافة قاعدة جديدة!**", ephemeral=True)
+                return
+
+            self.responses[guild_id][clean_keyword] = {
+                "reply": reply_text,
+                "match_type": match_type,
+                "mode": mode,
+                "message_type": message_type,
+                "delete_user_msg": delete_user_msg,
+                "delete_after_seconds": delete_after_seconds,
+                "uses_count": 0,
+                "author_id": interaction.user.id,
+                "created_at": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+            }
+            save_mega_responses(self.responses)
+
+            embed = discord.Embed(
+                title="⚡ ╎ تـم إضـافـة قـاعـدة الـرد الـتـلـقـائـي بنجاح تام",
+                description=(
+                    f"> 🔑 **الكلمة:** `{clean_keyword}`\n"
+                    f"> 🔍 **المطابقة:** `{match_type}` | **الإرسال:** `{mode}`\n"
+                    f"> 🎨 **النوع:** `{message_type}`\n"
+                    f"> 🗑️ **حذف رسالة العضو:** `{'مفعل ✅' if delete_user_msg else 'معطل ❌'}`\n"
+                    f"> ⏳ **حذف رد البوت بعد:** `{f'{delete_after_seconds} ثانية' if delete_after_seconds else 'دائم'}`\n\n"
+                    f"> 📄 **نص الرد:**\n{reply_text}"
+                ),
+                color=0x2ECC71,
+                timestamp=datetime.datetime.utcnow()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # محرك الاستماع الذكي لتنفيذ الردود بالخلفية
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -150,7 +186,6 @@ class EnterpriseAutoResponderCog(commands.Cog):
                 delete_user = data.get("delete_user_msg", False)
                 del_seconds = data.get("delete_after_seconds")
 
-                # استبدال المتغيرات الذكية
                 formatted_reply = (
                     reply_template.replace("[user]", message.author.mention)
                                   .replace("[userName]", message.author.name)
@@ -160,7 +195,6 @@ class EnterpriseAutoResponderCog(commands.Cog):
 
                 sent_msg = None
                 try:
-                    # 1. إرسال الرد بناءً على النوع والنمط
                     if msg_type == "embed":
                         res_embed = discord.Embed(description=formatted_reply, color=0x2B2D31)
                         res_embed.set_footer(text=f"Requested by {message.author.name}", icon_url=message.author.display_avatar.url)
@@ -176,14 +210,12 @@ class EnterpriseAutoResponderCog(commands.Cog):
                         else:
                             sent_msg = await message.channel.send(formatted_reply)
 
-                    # 2. حذف رسالة العضو الأصلية إذا كان الخيار مفعلًا
                     if delete_user:
                         try:
                             await message.delete()
                         except:
                             pass
 
-                    # 3. حذف رد البوت مؤقتاً بعد ثوانٍ محددة إذا تم تحديد وقت
                     if sent_msg and del_seconds and del_seconds > 0:
                         await sent_msg.delete(delay=float(del_seconds))
 
@@ -194,4 +226,3 @@ class EnterpriseAutoResponderCog(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(EnterpriseAutoResponderCog(bot))
-    
