@@ -3,13 +3,12 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import json
-from openai import OpenAI
+import requests
 
 # ==============================================================================
-# ⚙️️ إعدادات OpenAI API (المفتاح الجديد)
+# ⚙ إعدادات Pollinations API
 # ==============================================================================
-OPENAI_API_KEY = "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"
-client = OpenAI(api_key=OPENAI_API_KEY)
+POLLINATIONS_API_KEY = "sk_anMHgjpb65le6nbBBRoYTaDjb38VBKLN"
 
 CONFIG_FILE = "ai_system_config.json"
 
@@ -28,7 +27,7 @@ def save_ai_config(data):
 
 AI_SETTINGS = load_ai_config()
 
-# شخصيتك اللي طلبتها (كوميديا مصرية + قصف جبهات + جدية وقت المشاكل)
+# شخصيتك (كوميديا مصرية + قصف جبهات + جدية وقت الجد)
 EGYPTIAN_SYSTEM_PROMPT = """
 أنت بوت ذكاء اصطناعي داخل سيرفر ديسكورد مصري، اسمك "صاحب السيرفر"، جوك كوميدي، ساخر، ابن نكتة، وبتتكلم مصري صميم. 
 ولما الشخص بيكون محتاج منك مساعدة، أنت بتكلمه بكل جِدية وتفهم منه إيه المشكلة وتتكلم معاه بكل احترافية بدون مزح نهائياً. 
@@ -87,16 +86,33 @@ class EgyptianAISystem(commands.Cog):
 
         async with message.channel.typing():
             try:
-                # استخدام نموذج gpt-4o-mini السريع والقوي من OpenAI
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
+                # إرسال الطلب مع المفتاح الجديد لموقع Pollinations
+                headers = {
+                    "Authorization": f"Bearer {POLLINATIONS_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                
+                payload = {
+                    "messages": [
                         {"role": "system", "content": EGYPTIAN_SYSTEM_PROMPT},
                         {"role": "user", "content": user_message}
-                    ]
-                )
+                    ],
+                    "model": "openai"
+                }
+
+                response = requests.post("https://text.pollinations.ai/chat", headers=headers, json=payload, timeout=30)
                 
-                reply_text = response.choices[0].message.content
+                if response.status_code == 200:
+                    # محاولة استخراج الرد من صيغة الشات بتاعتهم
+                    try:
+                        res_json = response.json()
+                        reply_text = res_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        if not reply_text:
+                            reply_text = str(res_json)
+                    except:
+                        reply_text = response.text
+                else:
+                    reply_text = f"يا اسطى السيرفر رد عليّ بكود خطأ: {response.status_code}"
 
                 if len(reply_text) > 1990:
                     reply_text = reply_text[:1987] + "..."
@@ -104,8 +120,8 @@ class EgyptianAISystem(commands.Cog):
                 await message.reply(reply_text)
 
             except Exception as e:
-                print(f"❌ OpenAI Error: {e}")
-                await message.reply(f"⚠ يا اسطى حصل خطأ في الاتصال بـ OpenAI:\n`{e}`")
+                print(f"❌ Pollinations Auth Error: {e}")
+                await message.reply(f"⚠ يا اسطى حصل خطأ في الاتصال:\n`{e}`")
 
 async def setup(bot):
     await bot.add_cog(EgyptianAISystem(bot))
