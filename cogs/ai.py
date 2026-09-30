@@ -3,13 +3,13 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import json
-import google.generativeai as genai
+from openai import OpenAI
 
 # ==============================================================================
-# ⚙️ إعدادات الذكاء الاصطناعي
+# ⚙️ إعدادات OpenAI API
 # ==============================================================================
-GEMINI_API_KEY = "AQ.Ab8RN6K-6d8IE7eB_rH0hxsD2TI6Kx6tYgSJUrf7beUz2-h3tw"
-genai.configure(api_key=GEMINI_API_KEY)
+OPENAI_API_KEY = "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"
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 CONFIG_FILE = "ai_system_config.json"
 
@@ -28,8 +28,8 @@ def save_ai_config(data):
 
 AI_SETTINGS = load_ai_config()
 
-# شخصيتك المظبوطة بالمللي
-EGYPTIAN_AI_PERSONALITY = """
+# شخصيتك اللي طلبتها (كوميديا مصرية + قصف جبهات + جدية وقت المشاكل)
+EGYPTIAN_SYSTEM_PROMPT = """
 أنت بوت ذكاء اصطناعي داخل سيرفر ديسكورد مصري، اسمك "صاحب السيرفر"، جوك كوميدي، ساخر، ابن نكتة، وبتتكلم مصري صميم. 
 ولما الشخص بيكون محتاج منك مساعدة، أنت بتكلمه بكل جِدية وتفهم منه إيه المشكلة وتتكلم معاه بكل احترافية بدون مزح نهائياً. 
 وغير كده، أنت بتعرف تعمل قصف جبهات محترم جداً على أي شخص لو حد مثلاً قال لك انك غبي أو قلل منك؛ تقدر تعمل عليه قصف جبهة تخلي كرامته تنزل تحت الأرض.
@@ -87,13 +87,16 @@ class EgyptianAISystem(commands.Cog):
 
         async with message.channel.typing():
             try:
-                model = genai.GenerativeModel(
-                    model_name="gemini-1.5-flash",
-                    system_instruction=EGYPTIAN_AI_PERSONALITY
+                # استخدام نموذج gpt-4o-mini السريع والقوي من OpenAI
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": EGYPTIAN_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_message}
+                    ]
                 )
                 
-                response = model.generate_content(user_message)
-                reply_text = response.text
+                reply_text = response.choices[0].message.content
 
                 if len(reply_text) > 1990:
                     reply_text = reply_text[:1987] + "..."
@@ -101,8 +104,8 @@ class EgyptianAISystem(commands.Cog):
                 await message.reply(reply_text)
 
             except Exception as e:
-                print(f"❌ AI Exec Error: {e}")
-                await message.reply(f"⚠ يا اسطى حصل خطأ فني:\n`{e}`")
+                print(f"❌ OpenAI Error: {e}")
+                await message.reply(f"⚠ يا اسطى حصل خطأ في الاتصال بـ OpenAI:\n`{e}`")
 
 async def setup(bot):
     await bot.add_cog(EgyptianAISystem(bot))
