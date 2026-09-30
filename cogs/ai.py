@@ -3,11 +3,10 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import json
-import io
 import google.generativeai as genai
 
 # ==============================================================================
-# ⚙️ إعدادات وتكوين الذكاء الاصطناعي (مفتاحك الشخصي جاهز هنا يا معلم)
+# ⚙️ إعدادات وتكوين الذكاء الاصطناعي (مفتاحك جاهز وشغال يا معلم)
 # ==============================================================================
 GEMINI_API_KEY = "AQ.Ab8RN6K-6d8IE7eB_rH0hxsD2TI6Kx6tYgSJUrf7beUz2-h3tw"
 genai.configure(api_key=GEMINI_API_KEY)
@@ -31,7 +30,7 @@ AI_SETTINGS = load_ai_config()
 
 
 # ==============================================================================
-# 🧠 شخصية البوت (الدماغ المصرية الأصيلة + قصف الجبهات + دعم الصور)
+# 🧠 شخصية البوت (الدماغ المصرية الأصيلة + قصف الجبهات + الوضع الجدي)
 # ==============================================================================
 EGYPTIAN_AI_PERSONALITY = """
 أنت بوت ذكاء اصطناعي داخل سيرفر ديسكورد مصري، اسمك "صاحب السيرفر" أو الذكاء الاصطناعي الأسطوري، جوك كوميدي، ساخر، ابن نكتة، وبتتكلم مصري صميم (بشعبية وإفيهات).
@@ -40,7 +39,6 @@ EGYPTIAN_AI_PERSONALITY = """
 1. **الأسلوب الأساسي (الكوميديا والروشنة):** لو حد بيكلمك كلام عادي أو بيزار، رد عليه بطريقة كوميدية مصرية أصيلة زي: "يا اسطى أحوالي زي الطين، صاحبي اللي صنعني عمال يعدل فيا لحد ما جالي مغص إلكتروني"، أو "يا عم انت فريش ولا إيه؟". استعمل مصطلحات مصرية (يا اسطى، يا فنان، على الله حكايتك، منور يا معلم).
 2. **نظام قصف الجبهات (Roast Mode):** لو حسيت إن الشخص اللي قدامك بيتفلسف بزيادة، أو بيتقبّح، أو بيسأل سؤال غبي جداً، أو بيحاول يقلل منك أو يحرجك: **اقصف جبهته قصف محترم** بأسلوب ساخر يخليه يبلع لسانه بس من غير شتائم خارجة أو قلة أدب (قصف ذكي يضحك السيرفر كله عليه).
 3. **نظام الجدية التامة (Serious Mode):** لو حسيت إن الشخص اللي قدامك عنده مشكلة حقيقية، أو محتاج مساعدة تقنية بجد (مثلاً بيسأل عن كود برمجي، مشكلة في ديسكورد، مشكلة نفسية، أو بيطلب مساعدة جادة): **اقلب فجأة لشخصية جادة جداً، محترفة، وفاهمة، وصبورة.** اتكلم بلغة واضحة ومباشرة وساعده بكل ذكاء واحترافية من غير إفيهات سمجة.
-4. **توليد الصور:** لو حد طلب منك ترسم أو تولد صورة (مثلاً قال: ارسم كذا، اعمل لي صورة كذا)، استجيب للطلب ورد عليه بإفيه لطيف مع الصورة.
 """
 
 
@@ -66,7 +64,7 @@ class EgyptianAISystem(commands.Cog):
             if channel_id not in AI_SETTINGS[guild_id]["channels"]:
                 AI_SETTINGS[guild_id]["channels"].append(channel_id)
                 save_ai_config(AI_SETTINGS)
-                await interaction.response.send_message(f"✅ **يا معلم!** تم تفعيل نظام الذكاء الاصطناعي (المصري الأصيل + دعم الصور) في هذه القناة {interaction.channel.mention} بنجاح 🚀", ephemeral=True)
+                await interaction.response.send_message(f"✅ **يا معلم!** تم تفعيل نظام الذكاء الاصطناعي (المصري الأصيل) في هذه القناة {interaction.channel.mention} بنجاح 🚀", ephemeral=True)
             else:
                 await interaction.response.send_message("⚠️ النظام مفعّل أساساً في هذه القناة!", ephemeral=True)
                 
@@ -100,27 +98,7 @@ class EgyptianAISystem(commands.Cog):
 
         async with message.channel.typing():
             try:
-                # التحقق عما إذا كان المستخدم يطلب توليد صورة
-                is_image_request = any(word in user_message.lower() for word in ["ارسم", "صورة", "توليد صورة", "draw", "image", "generate image", "صمم لي صورة"])
-
-                if is_image_request:
-                    # استخدام موديل Imagen 3 أو توليد الصور المتاح لتوليد الصور
-                    img_model = genai.GenerativeModel("imagen-3.0-generate-002")
-                    result = img_model.generate_images(
-                        prompt=user_message,
-                        number_of_images=1,
-                        aspect_ratio="1:1",
-                        safety_filter_level="block_low_and_above",
-                        person_generation="allow_adult",
-                    )
-                    
-                    for generated_image in result.generated_images:
-                        image_bytes = generated_image.image.image_bytes
-                        file = discord.File(io.BytesIO(image_bytes), filename="ai_generated_image.png")
-                        await message.reply(f"🎨 **اتفضل يا اسطى صورتك جاهزة!** (لو مش عاجباك اشتكي للي صمموني 😂)", file=file)
-                        return
-                
-                # الرد العادي النصي (مع الشخصية المصرية وقصف الجبهات والجدية)
+                # استخدام موديل Gemini 1.5 Flash السريع والرهيب في الردود
                 model = genai.GenerativeModel(
                     model_name="gemini-1.5-flash",
                     system_instruction=EGYPTIAN_AI_PERSONALITY
