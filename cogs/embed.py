@@ -7,18 +7,22 @@ class CustomEmbedCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="embed", description="[إدارة متقدمة] إرسال إيمبد احترافي مخصص مع تحكم كامل بالصورة، الصورة المصغرة، اللون، والروم")
+    @app_commands.command(
+        name="embed",
+        description="[نظام إمبراطوري] إرسال إيمبد احترافي مخصص مع تحكم كامل بالصورة، الصورة المصغرة، واللون"
+    )
     @app_commands.describe(
-        description="محتوى ووصف الإيمبد الأساسي (يدعم التنسيق والنصوص الطويلة)",
+        description="محتوى ووصف الإيمبد الأساسي (يدعم النزول لسطر جديد تلقائياً)",
         title="عنوان الإيمبد (اختياري)",
-        color_hex="لون الإيمبد بنظام الهيكس مثل: #2b2d31 أو 00ffcc (افتطاري داكن)",
-        image_url="رابط الصورة الكبيرة المراد إرفاقها في أسفل الإيمبد (اختياري)",
+        color_hex="لون الإيمبد بنظام الهيكس (مثال: #2b2d31 أو 2ecc71)",
+        image_url="رابط الصورة الكبيرة في أسفل الإيمبد (اختياري)",
         thumbnail_url="رابط الصورة المصغرة الجانبية (اختياري)",
-        footer_text="النص أو الحقوق التي تظهر في أسفل الإيمبد (اختياري)",
+        footer_text="النص أو الحقوق في أسفل الإيمبد (اختياري)",
         channel="القناة المراد إرسال الإيمبد فيها (افتراضياً: الروم الحالية)"
     )
     @app_commands.checks.has_permissions(manage_messages=True)
     async def embed_cmd(
+        self,
         interaction: discord.Interaction, 
         description: str, 
         title: str = None, 
@@ -28,16 +32,16 @@ class CustomEmbedCog(commands.Cog):
         footer_text: str = None,
         channel: discord.TextChannel = None
     ):
-        # معالجة اللون وتحويله من Hex لـ Integer بشكل آمن
+        # 1. معالجة اللون وتحويله من Hex لـ Integer بشكل آمن ومحمي من الأخطاء
         try:
             clean_hex = color_hex.replace("#", "").strip()
             color_int = int(clean_hex, 16)
         except ValueError:
-            color_int = 0x2b2d31 # لون افتراضي في حال كتب قيمة غير صالحة
+            color_int = 0x2b2d31 # لون افتراضي داكن في حال كتب قيمة غير صالحة
 
-        # بناء الإيمبد الاحترافي
+        # 2. بناء الإيمبد الاحترافي
         embed = discord.Embed(
-            description=description.replace("\\n", "\n"), # دعم النزول لسطر جديد لو كتبها بالطريقة العادية
+            description=description.replace("\\n", "\n"), # دعم النزول لسطر جديد بالطريقة العادية
             color=color_int,
             timestamp=datetime.datetime.utcnow()
         )
@@ -54,23 +58,26 @@ class CustomEmbedCog(commands.Cog):
         if footer_text:
             embed.set_footer(text=footer_text)
         else:
-            embed.set_footer(text=f"Z I UO - MC Server ✦ Requested by {interaction.user.display_name}")
+            embed.set_footer(
+                text=f"Z I UO Empire ✦ Requested by {interaction.user.display_name}",
+                icon_url=interaction.user.display_avatar.url
+            )
 
-        # تحديد الروم المستهدفة (لو ما حددش روم، هيبعتها في نفس الروم الحالية)
+        # 3. تحديد الروم المستهدفة
         target_channel = channel or interaction.channel
 
         try:
             # إرسال الإيمبد للروم المطلوبة
             await target_channel.send(embed=embed)
             
-            # الرد على الإداري بسريّة وبدون إزعاج بالشات
+            # الرد السري للإداري بدون إزعاج الشات العام
             await interaction.response.send_message(
                 f"✅ **تم بنجاح!** تم إرسال الإيمبد المخصص إلى روم {target_channel.mention}.", 
                 ephemeral=True
             )
         except discord.HTTPException as e:
             await interaction.response.send_message(
-                f"❌ حدث خطأ أثناء إرسال الإيمبد، تأكد من صحة الروابط أو صلاحيات البوت. (الخطأ: `{e}`)", 
+                f"❌ **حدث خطأ أثناء الإرسال:** تأكد من صحة الروابط أو صلاحيات البوت. (`{e}`)", 
                 ephemeral=True
             )
 
