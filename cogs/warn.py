@@ -253,11 +253,12 @@ class UltimateWarningSystemCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    async def get_warn_choices(interaction: discord.Interaction):
+    # دالة الإكمال التلقائي المعدلة والصحيحة
+    async def get_warn_choices(self, interaction: discord.Interaction, current: str):
         choices = []
         names = SERVER_WARNING_CONFIGS["warn_names"]
         for idx, name in enumerate(names):
-            if idx < 25:
+            if current.lower() in name.lower() and idx < 25:
                 choices.append(app_commands.Choice(name=name, value=idx))
         return choices
 
@@ -321,11 +322,10 @@ class UltimateWarningSystemCog(commands.Cog):
         WARNINGS_DB[member.id].append(warning_record)
         total_user_warns = len(WARNINGS_DB[member.id])
 
-        # ميزة العقوبات التلقائية الذكية (Auto-Punishment) عند التحذير الثالث مثلاً
+        # ميزة العقوبات التلقائية الذكية (Auto-Punishment) عند التحذير الثالث
         auto_action_text = "لا توجد عقوبة تلقائية"
         if total_user_warns >= 3:
             try:
-                # إعطاء Timeout تلقائي لمدة ساعتين تأديبيين
                 timeout_duration = datetime.timedelta(hours=2)
                 await member.timeout(timeout_duration, reason="Auto-punishment: Reached 3 warnings threshold")
                 auto_action_text = "⚡ تم تطبيق (Timeout) تلقائي لمدة ساعتين لتجاوز الحد الأقصى للإنذارات!"
@@ -342,14 +342,17 @@ class UltimateWarningSystemCog(commands.Cog):
         embed.add_field(name="⚠️ ╎ نـوع الـتـحـذيـر", value=f"> ｢ {warn_name} ｣ (إجمالي: {total_user_warns})", inline=False)
         embed.add_field(name="⏳ ╎ الـمـدة", value=f"> ｢ {duration} ｣", inline=False)
         embed.add_field(name="📝 ╎ الـسـبـب", value=f"> ｢ {reason} ｣", inline=False)
-        embed.add_field(name="🎖️️ ╎ الرتبة المرتبطة", value=f"> {assigned_role_text}", inline=False)
+        embed.add_field(name="🎖 ╎ الرتبة المرتبطة", value=f"> {assigned_role_text}", inline=False)
         if total_user_warns >= 3:
             embed.add_field(name="🚨 ╎ إجراء تلقائي", value=f"> {auto_action_text}", inline=False)
 
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text="𝐙 𝐈 𝐔𝐎 ╎ Warnings Engine")
         
-        await interaction.followup.send(embed=embed)
+        sent_msg = await interaction.followup.send(embed=embed)
+
+        # حفظ آيدي الرسالة في السجل لكي يمكن حذفه مستقبلاً عند تصفير السجل
+        warning_record["log_message_id"] = sent_msg.id
 
         # إرسال لوج التحذير إلى القناة المخصصة تلقائياً إن وجدت
         log_ch_id = SERVER_WARNING_CONFIGS.get("log_channel_id")
@@ -359,7 +362,8 @@ class UltimateWarningSystemCog(commands.Cog):
                 try:
                     log_embed = embed.copy()
                     log_embed.title = "📢 ╎ سـجـل تـحـذيـر جـديـد (System Audit Log)"
-                    await log_channel.send(embed=log_embed)
+                    log_sent = await log_channel.send(embed=log_embed)
+                    warning_record["channel_log_message_id"] = log_sent.id
                 except:
                     pass
 
@@ -384,7 +388,7 @@ class UltimateWarningSystemCog(commands.Cog):
         else:
             embed = discord.Embed(
                 title="🛡️ ╎ لـوحـة تـحـكـم ونـظـام الـتـحـذيـرات الـمـركـزي",
-                description="> أهلاً بك في لوحة تحكم التحذيرات المرنة لسيرفر 𝐙𝐈𝐔𝐎.\n> اختر الإجراء المناسب من الأزرار الشاملة بالأسفل:",
+                description="> أهلاً بك في لوحة تحكم التحذيرات المرنة لسيرفر 𝐙𝐈𝐔Ο.\n> اختر الإجراء المناسب من الأزرار الشاملة بالأسفل:",
                 color=0x2B2D31
             )
             await interaction.response.send_message(embed=embed, view=AdvancedWarningsDashboard(self.bot), ephemeral=True)
@@ -410,7 +414,19 @@ class UltimateWarningSystemCog(commands.Cog):
                 except:
                     pass
 
-        await interaction.response.send_message(f"✅ **تم بنجاح!** تم إزالة آخر تحذير (`{removed['name']}`) عن العضو {member.mention}.", ephemeral=False)
+        # محاولة حذف رسالة اللوج الخاصة بهذا التحذير إن وجدت في قناة اللوج
+        log_ch_id = SERVER_WARNING_CONFIGS.get("log_channel_id")
+        if log_ch_id and "channel_log_message_id" in removed:
+            try:
+                log_ch = interaction.guild.get_channel(log_ch_id)
+                if log_ch:
+                    msg_to_del = await log_ch.fetch_message(removed["channel_log_message_id"])
+                    if msg_to_del:
+                        await msg_to_del.delete()
+            except:
+                pass
+
+        await interaction.response.send_message(f"✅ **تم بنجاح!** تم إزالة آخر تحذير (`{removed['name']}`) عن العضو {member.mention} وحذف رسالة السجل المرتبطة.", ephemeral=False)
 
 async def setup(bot):
     await bot.add_cog(UltimateWarningSystemCog(bot))
