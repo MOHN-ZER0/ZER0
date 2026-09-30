@@ -13,20 +13,22 @@ class VoicePresenceCog(commands.Cog):
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def joinvc(self, interaction: discord.Interaction, channel: discord.VoiceChannel = None):
-        # لو المستخدم ما حددش روم، نشوف لو هو قاعد في روم صوتي وندخل معاك أوتوماتيك
+        # تأجيل الاستجابة مؤقتاً (Defer) لأن الاتصال الصوتي قد يأخذ أكثر من 3 ثواني
+        await interaction.response.defer(ephemeral=True)
+
         target_channel = channel
         if not target_channel:
             if interaction.user.voice and interaction.user.voice.channel:
                 target_channel = interaction.user.voice.channel
             else:
-                await interaction.response.send_message("❌ يرجى تحديد روم صوتي، أو الانضمام إلى روم صوتي أولاً لكي يدخل البوت معك!", ephemeral=True)
+                await interaction.followup.send("❌ يرجى تحديد روم صوتي، أو الانضمام إلى روم صوتي أولاً لكي يدخل البوت معك!", ephemeral=True)
                 return
 
         try:
             # التحقق مما إذا كان البوت متصلاً بالفعل بروم صوتي في نفس السيرفر
             if interaction.guild.voice_client:
                 if interaction.guild.voice_client.channel.id == target_channel.id:
-                    await interaction.response.send_message(f"⚠️ البوت متواجد بالفعل في روم {target_channel.mention}!", ephemeral=True)
+                    await interaction.followup.send(f"⚠️ البوت متواجد بالفعل في روم {target_channel.mention}!", ephemeral=True)
                     return
                 await interaction.guild.voice_client.move_to(target_channel)
                 action_status = "نقل البوت وتحديث التواجد بنجاح"
@@ -42,30 +44,23 @@ class VoicePresenceCog(commands.Cog):
                 timestamp=datetime.datetime.utcnow()
             )
             embed.add_field(name="🔊 ╎ الـروم الصـوتـي", value=f"> ｢ {target_channel.mention} ｣", inline=False)
-            embed.add_field(name="🛡️️ ╎ بـواسـطـة", value=f"> ｢ {interaction.user.mention} ｣", inline=False)
+            embed.add_field(name="🛡 ╎ بـواسـطـة", value=f"> ｢ {interaction.user.mention} ｣", inline=False)
             embed.add_field(name="📌 ╎ الحـالـة", value=f"> ｢ {action_status} ｣", inline=False)
             embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
             embed.set_footer(text="Z I UO - MC Server ✦ Voice Presence Engine")
             
-            await interaction.response.send_message(embed=embed)
+            await interaction.followup.send(embed=embed)
 
         except discord.ClientException:
-            await interaction.response.send_message("❌ البوت متصل بالفعل بروم صوتي آخر في هذا السيرفر.", ephemeral=True)
+            await interaction.followup.send("❌ البوت متصل بالفعل بروم صوتي آخر في هذا السيرفر.", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ لا أمتلك صلاحيات كافية لدخول هذا الروم الصوتي (تأكد من صلاحيات Connect و Speak).", ephemeral=True)
+            await interaction.followup.send("❌ لا أمتلك صلاحيات كافية لدخول هذا الروم الصوتي (تأكد من صلاحيات Connect و Speak).", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"❌ حدث خطأ غير متوقع أثناء محاولة الاتصال بالروم: `{e}`", ephemeral=True)
+            await interaction.followup.send(f"❌ حدث خطأ أثناء الاتصال. **تأكد من تثبيت مكتبة PyNaCl** عبر الأوامر (`pip install PyNaCl`). الخطأ الفني: `{e}`", ephemeral=True)
 
     @app_commands.command(name="leavevc", description="[إدارة] إخراج البوت من الروم الصوتي وقفل الاتصال يدوياً")
     @app_commands.checks.has_permissions(administrator=True)
-    async def leavevc(interaction_or_self, interaction: discord.Interaction = None):
-        # دعم التوافقية لو تم استدعاؤها داخل الكلاس
-        if isinstance(interaction_or_self, discord.Interaction):
-            interaction = interaction_or_self
-            self_obj = None
-        else:
-            self_obj = interaction_or_self
-
+    async def leavevc(self, interaction: discord.Interaction):
         if interaction.guild.voice_client:
             channel_name = interaction.guild.voice_client.channel.name
             await interaction.guild.voice_client.disconnect()
