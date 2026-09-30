@@ -6,7 +6,7 @@ import json
 import google.generativeai as genai
 
 # ==============================================================================
-# ⚙️ إعدادات الذكاء الاصطناعي (بالمكتبة الأصلية المستقرة)
+# ⚙️ إعدادات الذكاء الاصطناعي
 # ==============================================================================
 GEMINI_API_KEY = "AQ.Ab8RN6K-6d8IE7eB_rH0hxsD2TI6Kx6tYgSJUrf7beUz2-h3tw"
 genai.configure(api_key=GEMINI_API_KEY)
@@ -78,7 +78,6 @@ class EgyptianAISystem(commands.Cog):
         is_channel_enabled = (guild_id in AI_SETTINGS and message.channel.id in AI_SETTINGS[guild_id]["channels"])
         is_bot_mentioned = self.bot.user.mentioned_in(message)
 
-调整后的 is_channel_enabled و is_bot_mentioned... (نفس المنطق)
         if not is_channel_enabled and not is_bot_mentioned:
             return
 
@@ -88,7 +87,6 @@ class EgyptianAISystem(commands.Cog):
 
         async with message.channel.typing():
             try:
-                # استخدام الموديل مع system_instruction المدعوم بامتياز هنا
                 model = genai.GenerativeModel(
                     model_name="gemini-1.5-flash",
                     system_instruction=EGYPTIAN_AI_PERSONALITY
