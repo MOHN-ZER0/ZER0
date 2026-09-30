@@ -8,7 +8,7 @@ import random
 from typing import Optional, Literal
 
 # ==============================================================================
-# 🌟 قاعدة البيانات ونظام الذاكرة المركزي للسحوبات الإمبراطورية
+# 🌟 قاعدة البيانات ونظام الذاكرة المركزي
 # ==============================================================================
 GW_DB_FILE = "ziuo_giveaway_enterprise_database.json"
 
@@ -27,8 +27,174 @@ def save_gw_db(data):
 
 
 # ==============================================================================
-# 🌟 واجهة الأزرار التفاعلية للمشاركة في السحب
+# 🌟 نوافذ الـ Modals المخصصة لإدخال البيانات بسلاسة
 # ==============================================================================
+class StartGiveawayModal(discord.ui.Modal, title="إطلاق جيف أواي جديد إمبراطوري"):
+    prize_input = discord.ui.TextInput(
+        label="اسم الجائزة",
+        placeholder="مثال: رتبة VIP أو نيترو أو رصيد...",
+        style=discord.TextStyle.short,
+        required=True
+    )
+    duration_input = discord.ui.TextInput(
+        label="المدة بالدقائق",
+        placeholder="مثال: 60 (يعني ساعة)",
+        style=discord.TextStyle.short,
+        required=True
+    )
+    winners_input = discord.ui.TextInput(
+        label="عدد الفائزين",
+        placeholder="مثال: 1 أو 3",
+        style=discord.TextStyle.short,
+        default="1",
+        required=True
+    )
+    message_input = discord.ui.TextInput(
+        label="رسالة أو وصف إضافي (اختياري)",
+        placeholder="شروط أو تفاصيل إضافية...",
+        style=discord.TextStyle.paragraph,
+        required=False
+    )
+
+    def __init__(self, bot, channel):
+        super().__init__()
+        self.bot = bot
+        self.channel = channel
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            duration = int(self.duration_input.value)
+            winners_count = int(self.winners_input.value)
+        except ValueError:
+            await interaction.response.send_message("❌ **خطأ:** المدة وعدد الفائزين يجب أن تكون أرقام صحيحة!", ephemeral=True)
+            return
+
+        prize_name = self.prize_input.value
+        custom_msg = self.message_input.value
+        guild_id = str(interaction.guild.id)
+        
+        db = load_gw_db()
+        if guild_id not in db:
+            db[guild_id] = {"giveaways": {}, "blacklist": [], "templates": {}, "logs": {}, "settings": {}}
+
+        gw_id = str(random.randint(100000, 999999))
+        ends_at = datetime.datetime.utcnow() + datetime.timedelta(minutes=duration)
+        min_days = db[guild_id]["settings"].get("min_account_days", 0)
+
+        desc = (f"💬 **{custom_msg}**\n\n" if custom_msg else "") + \
+               f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n" \
+               f"🎁 **الجائزة الكبرى:** {prize_name}\n" \
+               f"🏆 **عدد الفائزين:** `{winners_count}` فائز\n" \
+               f"⏳ **الوقت المتبقي:** <t:{int(ends_at.timestamp())}:R>\n" \
+               f"👤 **المُنشئ:** {interaction.user.mention}\n" \
+               f"🛡 **أدنى عمر للحساب:** `{min_days}` يوم\n" \
+               f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+
+        embed = discord.Embed(
+            title="<a:giveaway:1234567890> **مسـابـقـة جـيـف أواي جـديـدّة**",
+            description=desc,
+            color=0x2b2d31,
+            timestamp=datetime.datetime.utcnow()
+        )
+        embed.set_footer(text=f"Giveaway ID: {gw_id} • النظام الاحترافي")
+
+        view = EnterpriseGiveawayButtonView(self.bot, gw_id)
+        msg = await self.channel.send(embed=embed, view=view)
+
+        db[guild_id]["giveaways"][gw_id] = {
+            "channel_id": self.channel.id,
+            "message_id": msg.id,
+            "prize": prize_name,
+            "prize_type": "custom",
+            "winners_count": winners_count,
+            "ends_at": ends_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "participants": [],
+            "active": True,
+            "entry_method": "button",
+            "min_account_days": min_days
+        }
+        save_gw_db(db)
+
+        await interaction.response.send_message(f"✅ **تم إطلاق الجيف أواي بنجاح في روم** {self.channel.mention} برقم مرجعي `{gw_id}`!", ephemeral=True)
+
+
+class RerollModal(discord.ui.Modal, title="إعادة سحب (Reroll) فائز جديد"):
+    gw_id_input = discord.ui.TextInput(
+        label="رقم الجيف أواي المرجعي (ID)",
+        placeholder="أدخل رقم السحب المكون من أرقام...",
+        style=discord.TextStyle.short,
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        gw_id = self.gw_id_input.value.strip()
+        guild_id = str(interaction.guild.id)
+        db = load_gw_db()
+
+        if guild_id not in db or gw_id not in db[guild_id]["giveaways"]:
+            await interaction.response.send_message("❌ **رقم السحب غير صحيح أو غير موجود في السيرفر!**", ephemeral=True)
+            return
+
+        gw = db[guild_id]["giveaways"][gw_id]
+        if not gw["participants"]:
+            await interaction.response.send_message("❌ **لا توجد مشاركات متاحة في هذا السحب لإعادة السحب!**", ephemeral=True)
+            return
+
+        winner_id = random.choice(gw["participants"])
+        winner_member = interaction.guild.get_member(int(winner_id))
+        winner_mention = winner_member.mention if winner_member else f"<@{winner_id}>"
+
+        await interaction.response.send_message(f"🔄 **تمت إعادة السحب بنجاح!**\n👑 **الفائز البديل الجديد:** {winner_mention}\n🎁 **الجائزة:** {gw['prize']}")
+
+
+# ==============================================================================
+# 🌟 واجهة الأزرار والقوائم المنسدلة التفاعلية الرئيسية (Dashboard)
+# ==============================================================================
+class GiveawayDashboardSelect(discord.ui.Select):
+    def __init__(self, bot):
+        self.bot = bot
+        options = [
+            discord.SelectOption(label="إطلاق جيف أواي جديد", description="إنشاء مسابقة جديدة مع زر مشاركة", emoji="🎉", value="start_gw"),
+            discord.SelectOption(label="إعادة سحب (Reroll)", description="اختيار فائز بديل لسحب منتهي", emoji="🔄", value="reroll_gw"),
+            discord.SelectOption(label="إدارة القائمة السوداء", description="حظر أو إزالة مستخدم من المشاركة", emoji="🚫", value="blacklist_mgmt"),
+            discord.SelectOption(label="ضبط روم السجلات (Logs)", description="تحديد الروم الخاصة بتسجيل العمليات", emoji="📊", value="set_logs"),
+            discord.SelectOption(label="إعدادات الحماية والأمان", description="تحديد أدنى عمر لحساب المشارك", emoji="⚙️", value="settings_gw")
+        ]
+        super().__init__(placeholder="اختر الإجراء المطلوب إدارته من القائمة...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        val = self.values[0]
+        guild_id = str(interaction.guild.id)
+        db = load_gw_db()
+        if guild_id not in db:
+            db[guild_id] = {"giveaways": {}, "blacklist": [], "templates": {}, "logs": {}, "settings": {}}
+
+        if val == "start_gw":
+            # نطلب منه تحديد الروم أولاً أو نفتح المودال في نفس الروم الحالية
+            await interaction.response.send_modal(StartGiveawayModal(self.bot, interaction.channel))
+
+        elif val == "reroll_gw":
+            await interaction.response.send_modal(RerollModal())
+
+        elif val == "blacklist_mgmt":
+            await interaction.response.send_message("💡 **لإدارة القائمة السوداء، استخدم الأمر المباشر مع تحديد العضو:**\n`/giveaway-manage blacklist [add/remove] [العضو]`", ephemeral=True)
+
+        elif val == "set_logs":
+            db[guild_id]["logs"]["channel_id"] = interaction.channel.id
+            save_gw_db(db)
+            await interaction.response.send_message(f"✅ **تم تعيين هذه الروم ({interaction.channel.mention}) كروم رسمية لسجلات الجيف أواي بنجاح!**", ephemeral=True)
+
+        elif val == "settings_gw":
+            current_days = db[guild_id]["settings"].get("min_account_days", 0)
+            await interaction.response.send_message(f"⚙️ **إعدادات الحماية الحالية:**\n- أدنى عمر للحساب للمشاركة: `{current_days}` يوم.\n*(يمكنك تعديلها لاحقاً)*", ephemeral=True)
+
+
+class GiveawayDashboardView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=180)
+        self.add_item(GiveawayDashboardSelect(bot))
+
+
 class EnterpriseGiveawayButtonView(discord.ui.View):
     def __init__(self, bot, gw_id):
         super().__init__(timeout=None)
@@ -50,13 +216,10 @@ class EnterpriseGiveawayButtonView(discord.ui.View):
             return
 
         user_id = str(interaction.user.id)
-
-        # فحص القائمة السوداء
         if user_id in db[guild_id].get("blacklist", []):
             await interaction.response.send_message("❌ **أنت مسجل في القائمة السوداء لهذا السحب ولا يمكنك المشاركة!**", ephemeral=True)
             return
 
-        # فحص عمر الحساب
         min_days = gw.get("min_account_days", 0)
         if min_days > 0:
             account_age = (datetime.datetime.utcnow() - interaction.user.created_at).days
@@ -75,9 +238,9 @@ class EnterpriseGiveawayButtonView(discord.ui.View):
 
 
 # ==============================================================================
-# 🌟 الـ Cog العملاق والمتكامل لإدارة الجيف أواي بنظام الإمبراطورية الشامل
+# 🌟 الـ Cog الرئيسي والـ Dashboard المتكاملة
 # ==============================================================================
-class ZiuoGiveawayEnterpriseCog(commands.Cog):
+class ZiuoGiveawayDashboardCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.database = load_gw_db()
@@ -86,138 +249,98 @@ class ZiuoGiveawayEnterpriseCog(commands.Cog):
     def cog_unload(self):
         self.check_giveaways_loop.cancel()
 
-    # دالة مساعدة لإرسال اللوقات (Logs)
-    async def send_log(self, guild, action_title, description):
-        guild_id = str(guild.id)
-        if guild_id not in self.database:
-            return
-        log_channel_id = self.database[guild_id].get("logs", {}).get("channel_id")
-        if not log_channel_id:
-            return
-        ch = guild.get_channel(log_channel_id)
-        if ch:
-            embed = discord.Embed(
-                title=f"📊 [لوق الجيف أواي] {action_title}",
-                description=description,
-                color=0x3498DB,
-                timestamp=datetime.datetime.utcnow()
-            )
-            try:
-                await ch.send(embed=embed)
-            except:
-                pass
-
-    # 1. إعدادات اللوقات العامة
+    # أمر واحد رئيسي يفتح لك اللوحة المنسدلة بالكامل
     @app_commands.command(
-        name="gw_set_log",
-        description="[اللوقات] تحديد روم خاصة لتسجيل أحداث وإشعارات الجيف أواي تلقائياً"
+        name="giveaway",
+        description="[لوحة التحكم الشاملة] إدارة جميع سحوبات السيرفر من قائمة واحدة تفاعلية"
     )
-    @app_commands.describe(channel="روم اللوقات الجديدة")
     @app_commands.checks.has_permissions(administrator=True)
-    async def gw_set_log(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        guild_id = str(interaction.guild.id)
-        if guild_id not in self.database:
-            self.database[guild_id] = {"giveaways": {}, "blacklist": [], "templates": {}, "logs": {}, "settings": {}}
+    async def giveaway_dashboard(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="⚙️ **لـوحـة تـحـكـم الـجـيـف أواي الإمـبـراطـوريـة**",
+            description=(
+                "مرحباً بك يا محمد في لوحة التحكم المركزية للسحوبات والجوائز.\n\n"
+                "👇 **اختر الإجراء المناسب من القائمة المنسدلة بالأسفل للتحكم الفوري:**"
+            ),
+            color=0x2b2d31,
+            timestamp=datetime.datetime.utcnow()
+        )
+        embed.set_footer(text=f"Server: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
         
-        self.database[guild_id]["logs"]["channel_id"] = channel.id
-        save_gw_db(self.database)
-        await interaction.response.send_message(f"✅ **تم ضبط روم لوقات الجيف أواي بنجاح على:** {channel.mention}", ephemeral=True)
+        view = GiveawayDashboardView(self.bot)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    # 2. إعدادات السحوبات الافتراضية (عمر الحساب والرسائل الخاصة)
-    @app_commands.command(
-        name="gw_settings",
-        description="[الإعدادات] ضبط الحد الأدنى لعمر الحساب والرسائل الخاصة للفائزين"
-    )
-    @app_commands.describe(
-        min_account_days="الحد الأدنى الافتراضي لأيام إنشاء الحساب",
-        dm_winners="إرسال رسالة خاصة تلقائية للفائزين (True/False)"
-    )
-    @app_commands.checks.has_permissions(administrator=True)
-    async def gw_settings(
-        self,
-        interaction: discord.Interaction,
-        min_account_days: Optional[int] = None,
-        dm_winners: Optional[bool] = None
-    ):
-        guild_id = str(interaction.guild.id)
-        if guild_id not in self.database:
-            self.database[guild_id] = {"giveaways": {}, "blacklist": [], "templates": {}, "logs": {}, "settings": {}}
+    # حلقة تلقائية (Loop) للتحقق من انتهاء السحوبات وإعلان الفائزين
+    @tasks.loop(seconds=30)
+    async def check_giveaways_loop(self):
+        db = load_gw_db()
+        now = datetime.datetime.utcnow()
 
-        if min_account_days is not None:
-            self.database[guild_id]["settings"]["min_account_days"] = min_account_days
-        if dm_winners is not None:
-            self.database[guild_id]["settings"]["dm_winners"] = dm_winners
+        for guild_id, data in db.items():
+            guild = self.bot.get_guild(int(guild_id))
+            if not guild:
+                continue
 
-        save_gw_db(self.database)
-        await interaction.response.send_message("⚙️ **تم تحديث إعدادات الجيف أواي الافتراضية بنجاح!**", ephemeral=True)
+            for gw_id, gw in data.get("giveaways", {}).items():
+                if not gw["active"]:
+                    continue
 
-    # 3. إدارة القوالب (Templates)
-    @app_commands.command(
-        name="gw_template_create",
-        description="[القوالب] إنشاء قالب جيف أواي جاهز ومحفوظ للاستخدام السريع"
-    )
-    @app_commands.describe(template_name="اسم القالب", prize_title="عنوان الجائزة", winners_count="عدد الفائزين")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def gw_template_create(self, interaction: discord.Interaction, template_name: str, prize_title: str, winners_count: int = 1):
-        guild_id = str(interaction.guild.id)
-        if guild_id not in self.database:
-            self.database[guild_id] = {"giveaways": {}, "blacklist": {}, "templates": {}, "logs": {}, "settings": {}}
+                ends_at = datetime.datetime.strptime(gw["ends_at"], "%Y-%m-%d %H:%M:%S")
+                if now >= ends_at:
+                    gw["active"] = False
+                    save_gw_db(db)
 
-        t_key = template_name.lower().strip()
-        self.database[guild_id]["templates"][t_key] = {"prize": prize_title, "winners": winners_count}
-        save_gw_db(self.database)
-        await interaction.response.send_message(f"✅ **تم إنشاء وحفظ قالب الجيف أواي باسم:** `{t_key}`", ephemeral=True)
+                    channel = guild.get_channel(gw["channel_id"])
+                    if not channel:
+                        continue
 
-    # 4. إدارة القائمة السوداء (Blacklist)
-    @app_commands.command(
-        name="gw_blacklist",
-        description="[القائمة السوداء] حظر أو إزالة مستخدم من المشاركة في كافة السحوبات"
-    )
-    @app_commands.describe(action="نوع الإجراء (إضافة أو إزالة)", user="العضو المستهدف")
-    @app_commands.choices(
-        action=[
-            app_commands.Choice(name="إضافة للقائمة السوداء", value="add"),
-            app_commands.Choice(name="إزالة من القائمة السوداء", value="remove")
-        ]
-    )
-    @app_commands.checks.has_permissions(administrator=True)
-    async def gw_blacklist(self, interaction: discord.Interaction, action: Literal["add", "remove"], user: discord.Member):
-        guild_id = str(interaction.guild.id)
-        if guild_id not in self.database:
-            self.database[guild_id] = {"giveaways": {}, "blacklist": [], "templates": {}, "logs": {}, "settings": {}}
+                    try:
+                        msg = await channel.fetch_message(gw["message_id"])
+                    except:
+                        msg = None
 
-        user_id = str(user.id)
-        bl = self.database[guild_id]["blacklist"]
+                    participants = gw["participants"]
+                    winners_count = gw["winners_count"]
 
-        if action == "add":
-            if user_id not in bl:
-                bl.append(user_id)
-                save_gw_db(self.database)
-                await interaction.response.send_message(f"🚫 **تم إضافة العضو {user.mention} إلى القائمة السوداء للجيف أواي.**", ephemeral=True)
-                await self.send_log(interaction.guild, "إضافة للقائمة السوداء", f"تم حظر العضو {user.mention} بواسطة {interaction.user.mention}")
-            else:
-                await interaction.response.send_message("⚠️ **العضو موجود مسبقاً في القائمة السوداء.**", ephemeral=True)
-        else:
-            if user_id in bl:
-                bl.remove(user_id)
-                save_gw_db(self.database)
-                await interaction.response.send_message(f"✅ **تم إزالة العضو {user.mention} من القائمة السوداء.**", ephemeral=True)
-                await self.send_log(interaction.guild, "إزالة من القائمة السوداء", f"تم رفع الحظر عن العضو {user.mention} بواسطة {interaction.user.mention}")
-            else:
-                await interaction.response.send_message("⚠️ **العضو ليس موجوداً في القائمة السوداء.**", ephemeral=True)
+                    if not participants:
+                        result_text = f"❌ **انتهى السحب على ({gw['prize']}) ولم يشارك أي شخص للأسف!**"
+                    else:
+                        winners = random.sample(participants, min(len(participants), winners_count))
+                        winners_mentions = []
+                        
+                        for idx, wid in enumerate(winners, start=1):
+                            member = guild.get_member(int(wid))
+                            if member:
+                                winners_mentions.append(f"**{idx}.** {member.mention}")
+                            else:
+                                winners_mentions.append(f"**{idx}.** <@{wid}>")
+                        
+                        formatted_winners = "\n".join(winners_mentions)
+                        result_text = (
+                            f"╭━━━ 🎊 **إنـتـهـى الـسـحـب بـنـجـاح** 🎊 ━━━╮\n"
+                            f"🎁 **الجائزة:** {gw['prize']}\n"
+                            f"👑 **الفائزون بالترتيب:**\n{formatted_winners}\n"
+                            f"╰━━━━━━━━━━━━━━━━━━━━╯"
+                        )
 
-    # 5. بدء جيف أواي احترافي جديد مع إمكانية اختيار طريقة المشاركة (زر أو رياكشن) وتخصيص الرسالة
-    @app_commands.command(
-        name="giveaway_start",
-        description="[السحوبات] إنشاء وانطلاق جيف أواي جديد مع تحديد طريقة المشاركة (زر تفاعلي أو رياكشن)"
-    )
-    @app_commands.describe(
-        channel="روم نشر الجيف أواي",
-        prize="عنوان وجائزة السحب",
-        duration_minutes="مدة السحب بالدقائق",
-        winners_count="عدد الفائزين",
-        entry_method="طريقة المشاركة: زر تفاعلي (button) أو رياكشن (reaction)",
-        custom_message="رسالة أو نص إضافي يظهر داخل الجيف أواي (اختياري)",
+                    if msg:
+                        try:
+                            embed_msg = msg.embeds[0]
+                            embed_msg.color = 0x2b2d31
+                            embed_msg.title = "🔒 **انـتـهـى الـجـيـف أواي (مغلق)** 🔒"
+                            await msg.edit(embed=embed_msg, view=None)
+                        except:
+                            pass
+
+                    await channel.send(result_text)
+
+    @check_giveaways_loop.before_loop
+    async def before_check_giveaways_loop(self):
+        await self.bot.wait_until_ready()
+
+async def setup(bot):
+    await bot.add_cog(ZiuoGiveawayDashboardCog(bot))
+ge="رسالة أو نص إضافي يظهر داخل الجيف أواي (اختياري)",
         image_url="رابط صورة الجائزة (اختياري)"
     )
     @app_commands.choices(
