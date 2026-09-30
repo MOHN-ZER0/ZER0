@@ -4,6 +4,7 @@ from discord.ext import commands
 import datetime
 import json
 import os
+from typing import Optional, Literal
 
 # قاعدة بيانات تخزين إعدادات وأقسام ولوحات التذاكر لكل سيرفر مع الإحصائيات
 TICKETS_DB_FILE = "ziuo_ultimate_tickets_database.json"
@@ -77,7 +78,6 @@ class MultiPanelTicketSelect(discord.ui.Select):
             guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, manage_messages=True)
         }
 
-        # تحديد رتبة الدعم الخاصة بالقسم (أو الرتبة العامة إن لم تتوفر بالقسم)
         support_role_id = section_data.get("support_role_id") or guild_data.get("support_role_id")
         support_role = guild.get_role(support_role_id) if support_role_id else None
         if support_role:
@@ -90,7 +90,6 @@ class MultiPanelTicketSelect(discord.ui.Select):
             overwrites=overwrites
         )
 
-        # تسجيل وتخزين معلومات التذكرة النشطة في قاعدة البيانات (للإحصائيات)
         if "active_tickets" not in guild_data:
             guild_data["active_tickets"] = {}
         
@@ -365,10 +364,6 @@ class CustomTicketsUltimateCog(commands.Cog):
         await interaction.response.send_message(f"✅ تم إضافة القسم ｢ **{title}** ｣ بنجاح إلى اللوحة **{panel_name}** مع ربطه برتبة دعم: {role_mention}!", ephemeral=True)
 
     @app_commands.command(name="ticket_panel_deploy", description="نشر لوحة تذاكر معينة في القناة الحالية (قائمة منسدلة أو أزرار)")
-    @app_commands.choice(display_type=[
-        app_commands.Choice(name="قائمة منسدلة (Dropdown Menu)", value="menu"),
-        app_commands.Choice(name="أزرار بارزة (Buttons)", value="buttons")
-    ])
     @app_commands.checks.has_permissions(administrator=True)
     async def ticket_panel_deploy(
         self, 
@@ -376,7 +371,7 @@ class CustomTicketsUltimateCog(commands.Cog):
         panel_name: str,
         title: str, 
         description: str, 
-        display_type: str, 
+        display_type: Literal["menu", "buttons"], 
         color_hex: str = "2b2d31", 
         image_url: str = None
     ):
@@ -426,7 +421,7 @@ class CustomTicketsUltimateCog(commands.Cog):
 
         if active:
             active_desc = ""
-            for ch_id, data in list(active.items())[:5]: # عرض اخر 5 تذاكر مفتوحة كنموذج
+            for ch_id, data in list(active.items())[:5]:
                 member_obj = interaction.guild.get_member(data['user_id'])
                 member_str = member_obj.mention if member_obj else f"مستخدم (`{data['user_id']}`)"
                 active_desc += f"• صاحبها: {member_str} | القسم: `{data['section']}` | في: `{data['created_at']}`\n"
