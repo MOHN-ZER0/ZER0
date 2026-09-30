@@ -2,10 +2,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import datetime
-from typing import Optional, Literal
+from typing import Optional
 
 # ==============================================================================
-# 🌟 إعدادات وقاعدة بيانات نظام الترحيب والمغادرة (Enterprise Safe Core)
+# 🌟 إعدادات وقاعدة بيانات نظام الترحيب والمغادرة (Enterprise Core)
 # ==============================================================================
 MEGA_WELCOME_CONFIG = {
     "welcome_enabled": True,
@@ -19,6 +19,8 @@ MEGA_WELCOME_CONFIG = {
     "autorole_id": None,
     
     "card_image_url": "https://probot.media/Bwt5SOHnkM.png",
+    "leave_image_url": "https://probot.media/leave_default.png",
+    "dm_image_url": "https://probot.media/dm_default.png",
     
     "welcome_message": (
         "## ⚡ ╎ WELCOME TO ZIUO EMPIRE ⚡\n\n"
@@ -43,145 +45,200 @@ MEGA_SERVER_INVITES_CACHE = {}
 
 
 # ==============================================================================
-# 📝 نوافذ الإدخال التفاعلية (Modals) لتعديل النصوص
+# 📝 القوائم التفاعلية (Modals) للتحكم الشامل
 # ==============================================================================
-class WelcomeTextModal(discord.ui.Modal, title="تعديل رسالة الترحيب العامة"):
-    text_input = discord.ui.TextInput(
-        label="رسالة الترحيب الجديدة",
+
+# 1. قائمة تفعيل أو تعطيل الأنظمة
+class SystemsToggleModal(discord.ui.Modal, title="⚙️ إعدادات تشغيل وتوقف الأنظمة"):
+    w_status = discord.ui.TextInput(
+        label="دخول العضو (اكتب: مفعل أو معطل)",
+        style=discord.TextStyle.short,
+        default="مفعل" if MEGA_WELCOME_CONFIG["welcome_enabled"] else "معطل",
+        max_length=10
+    )
+    l_status = discord.ui.TextInput(
+        label="خروج العضو (اكتب: مفعل أو معطل)",
+        style=discord.TextStyle.short,
+        default="مفعل" if MEGA_WELCOME_CONFIG["leave_enabled"] else "معطل",
+        max_length=10
+    )
+    card_status = discord.ui.TextInput(
+        label="الصورة الترحيبية (اكتب: مفعل أو معطل)",
+        style=discord.TextStyle.short,
+        default="مفعل" if MEGA_WELCOME_CONFIG["card_enabled"] else "معطل",
+        max_length=10
+    )
+    dm_status = discord.ui.TextInput(
+        label="الرسالة الخاصة DM (اكتب: مفعل أو معطل)",
+        style=discord.TextStyle.short,
+        default="مفعل" if MEGA_WELCOME_CONFIG["dm_welcome_enabled"] else "معطل",
+        max_length=10
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        MEGA_WELCOME_CONFIG["welcome_enabled"] = self.w_status.value.strip().lower() in ["مفعل", "true", "1", "yes", "on"]
+        MEGA_WELCOME_CONFIG["leave_enabled"] = self.l_status.value.strip().lower() in ["مفعل", "true", "1", "yes", "on"]
+        MEGA_WELCOME_CONFIG["card_enabled"] = self.card_status.value.strip().lower() in ["مفعل", "true", "1", "yes", "on"]
+        MEGA_WELCOME_CONFIG["dm_welcome_enabled"] = self.dm_status.value.strip().lower() in ["مفعل", "true", "1", "yes", "on"]
+        
+        await interaction.response.send_message("✅ **تم تحديث حالات الأنظمة بنجاح!**", ephemeral=True)
+
+
+# 2. قائمة تحديد رومات الترحيب والمغادرة
+class ChannelsEditModal(discord.ui.Modal, title="📌 تحديد رومات الترحيب والمغادرة"):
+    w_channel = discord.ui.TextInput(
+        label="آيدي أو اسم روم الترحيب",
+        style=discord.TextStyle.short,
+        placeholder="اكتب آيدي الروم أو اسمها هنا...",
+        default=str(MEGA_WELCOME_CONFIG["welcome_channel_id"]) if MEGA_WELCOME_CONFIG["welcome_channel_id"] else "",
+        required=False,
+        max_length=50
+    )
+    l_channel = discord.ui.TextInput(
+        label="آيدي أو اسم روم المغادرة",
+        style=discord.TextStyle.short,
+        placeholder="اكتب آيدي الروم أو اسمها هنا...",
+        default=str(MEGA_WELCOME_CONFIG["leave_channel_id"]) if MEGA_WELCOME_CONFIG["leave_channel_id"] else "",
+        required=False,
+        max_length=50
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        
+        # معالجة روم الترحيب
+        w_val = self.w_channel.value.strip()
+        if w_val:
+            if w_val.isdigit():
+                ch = guild.get_channel(int(w_val))
+            else:
+                ch = discord.utils.get(guild.text_channels, name=w_val)
+            if ch:
+                MEGA_WELCOME_CONFIG["welcome_channel_id"] = ch.id
+        else:
+            MEGA_WELCOME_CONFIG["welcome_channel_id"] = None
+
+        # معالجة روم المغادرة
+        l_val = self.l_channel.value.strip()
+        if l_val:
+            if l_val.isdigit():
+                ch_l = guild.get_channel(int(l_val))
+            else:
+                ch_l = discord.utils.get(guild.text_channels, name=l_val)
+            if ch_l:
+                MEGA_WELCOME_CONFIG["leave_channel_id"] = ch_l.id
+        else:
+            MEGA_WELCOME_CONFIG["leave_channel_id"] = None
+
+        await interaction.response.send_message("✅ **تم تحديث رومات الترحيب والمغادرة بنجاح!**", ephemeral=True)
+
+
+# 3. قائمة تعديل الرسائل مع الشرح الكامل في الأسفل
+class MessagesEditModal(discord.ui.Modal, title="💬 تعديل الرسائل والاختصارات"):
+    w_msg = discord.ui.TextInput(
+        label="رسالة الترحيب",
         style=discord.TextStyle.paragraph,
-        placeholder="اكتب رسالتك هنا... (يمكنك استخدام الاختصارات مثل [userName], [server], [memberCount])",
         default=MEGA_WELCOME_CONFIG["welcome_message"],
-        max_length=2000
+        max_length=1000
     )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        MEGA_WELCOME_CONFIG["welcome_message"] = self.text_input.value
-        await interaction.response.send_message("✅ **تم تحديث رسالة الترحيب بنجاح!**", ephemeral=True)
-
-
-class LeaveTextModal(discord.ui.Modal, title="تعديل رسالة المغادرة"):
-    text_input = discord.ui.TextInput(
-        label="رسالة المغادرة الجديدة",
+    l_msg = discord.ui.TextInput(
+        label="رسالة المغادرة",
         style=discord.TextStyle.paragraph,
-        placeholder="اكتب رسالة المغادرة هنا...",
         default=MEGA_WELCOME_CONFIG["leave_message"],
-        max_length=2000
+        max_length=1000
     )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        MEGA_WELCOME_CONFIG["leave_message"] = self.text_input.value
-        await interaction.response.send_message("✅ **تم تحديث رسالة المغادرة بنجاح!**", ephemeral=True)
-
-
-class DMTextModal(discord.ui.Modal, title="تعديل رسالة الخاص (DM)"):
-    text_input = discord.ui.TextInput(
-        label="رسالة الخاص الجديدة",
+    dm_msg = discord.ui.TextInput(
+        label="رسالة الترحيب الخاصة (DM)",
         style=discord.TextStyle.paragraph,
-        placeholder="اكتب رسالة الخاص هنا...",
         default=MEGA_WELCOME_CONFIG["dm_message"],
-        max_length=2000
+        max_length=1000
+    )
+    variables_guide = discord.ui.TextInput(
+        label="📌 شرح الاختصارات (للقراءة فقط - لا تعدلها)",
+        style=discord.TextStyle.paragraph,
+        default=(
+            "[user] / [userName] = منشن أو اسم العضو\n"
+            "[server] = اسم السيرفر | [memberCount] = عدد الأعضاء\n"
+            "[inviterName] = اسم الداعي | [invites] = عدد الدعوات\n"
+            "[accountCreated] = تاريخ إنشاء الحساب"
+        ),
+        max_length=300,
+        required=False
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        MEGA_WELCOME_CONFIG["dm_message"] = self.text_input.value
-        MEGA_WELCOME_CONFIG["dm_welcome_enabled"] = True
-        await interaction.response.send_message("✅ **تم تحديث وتفعيل رسالة الخاص (DM) بنجاح!**", ephemeral=True)
+        MEGA_WELCOME_CONFIG["welcome_message"] = self.w_msg.value
+        MEGA_WELCOME_CONFIG["leave_message"] = self.l_msg.value
+        MEGA_WELCOME_CONFIG["dm_message"] = self.dm_msg.value
+        await interaction.response.send_message("✅ **تم حفظ وتعديل رسائل الإمبراطورية بنجاح!**", ephemeral=True)
+
+
+# 4. قائمة تعديل روابط الصور
+class ImagesEditModal(discord.ui.Modal, title="🖼️ تعديل روابط صور الترحيب والمغادرة"):
+    card_img = discord.ui.TextInput(
+        label="رابط صورة الترحيب",
+        style=discord.TextStyle.short,
+        default=MEGA_WELCOME_CONFIG["card_image_url"],
+        max_length=300
+    )
+    leave_img = discord.ui.TextInput(
+        label="رابط صورة المغادرة",
+        style=discord.TextStyle.short,
+        default=MEGA_WELCOME_CONFIG["leave_image_url"],
+        max_length=300
+    )
+    dm_img = discord.ui.TextInput(
+        label="رابط صورة رسالة الخاص",
+        style=discord.TextStyle.short,
+        default=MEGA_WELCOME_CONFIG["dm_image_url"],
+        max_length=300
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        MEGA_WELCOME_CONFIG["card_image_url"] = self.card_img.value
+        MEGA_WELCOME_CONFIG["leave_image_url"] = self.leave_img.value
+        MEGA_WELCOME_CONFIG["dm_image_url"] = self.dm_img.value
+        await interaction.response.send_message("✅ **تم تحديث روابط الصور بنجاح!**", ephemeral=True)
 
 
 # ==============================================================================
-# 🎛️ لوحة التحكم التفاعلية الكبرى بالزرار (Dashboard UI) نفس استايل الصورة
+# 🎛️ لوحة التحكم الرئيسية بالأزرار المنسقة
 # ==============================================================================
 class MegaWelcomeControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=300)
-        self.refresh_labels()
 
-    def refresh_labels(self):
-        self.btn_w_toggle.label = f"الترحيب: {'مفعل ✅' if MEGA_WELCOME_CONFIG['welcome_enabled'] else 'مفعل ❌'}"
-        self.btn_w_toggle.style = discord.ButtonStyle.green if MEGA_WELCOME_CONFIG['welcome_enabled'] else discord.ButtonStyle.red
-
-        self.btn_l_toggle.label = f"المغادرة: {'مفعل ✅' if MEGA_WELCOME_CONFIG['leave_enabled'] else 'مفعل ❌'}"
-        self.btn_l_toggle.style = discord.ButtonStyle.green if MEGA_WELCOME_CONFIG['leave_enabled'] else discord.ButtonStyle.red
-
-        self.btn_dm_toggle.label = f"ترحيب الخاص: {'مفعل ✅' if MEGA_WELCOME_CONFIG['dm_welcome_enabled'] else 'مفعل ❌'}"
-        self.btn_dm_toggle.style = discord.ButtonStyle.green if MEGA_WELCOME_CONFIG['dm_welcome_enabled'] else discord.ButtonStyle.red
-
-        self.btn_card_toggle.label = f"بطاقة الصورة: {'مفعل ✅' if MEGA_WELCOME_CONFIG['card_enabled'] else 'مفعل ❌'}"
-        self.btn_card_toggle.style = discord.ButtonStyle.green if MEGA_WELCOME_CONFIG['card_enabled'] else discord.ButtonStyle.red
-
-    @discord.ui.button(label="الترحيب: مفعل ✅", style=discord.ButtonStyle.green, row=0)
-    async def btn_w_toggle(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="⚙️ تشغيل/إيقاف الأنظمة", style=discord.ButtonStyle.blurple, row=0)
+    async def btn_toggle_systems(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للمدراء فقط!", ephemeral=True)
             return
-        MEGA_WELCOME_CONFIG['welcome_enabled'] = not MEGA_WELCOME_CONFIG['welcome_enabled']
-        self.refresh_labels()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.send_modal(SystemsToggleModal())
 
-    @discord.ui.button(label="تعديل رسالة الترحيب", style=discord.ButtonStyle.blurple, row=0)
-    async def btn_edit_w(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="📌 تحديد رومات الترحيب والمغادرة", style=discord.ButtonStyle.green, row=0)
+    async def btn_edit_channels(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للمدراء فقط!", ephemeral=True)
             return
-        await interaction.response.send_modal(WelcomeTextModal())
+        await interaction.response.send_modal(ChannelsEditModal())
 
-    @discord.ui.button(label="المغادرة: مفعل ✅", style=discord.ButtonStyle.green, row=1)
-    async def btn_l_toggle(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="💬 تعديل الرسائل والاختصارات", style=discord.ButtonStyle.blurple, row=1)
+    async def btn_edit_messages(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للمدراء فقط!", ephemeral=True)
             return
-        MEGA_WELCOME_CONFIG['leave_enabled'] = not MEGA_WELCOME_CONFIG['leave_enabled']
-        self.refresh_labels()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.send_modal(MessagesEditModal())
 
-    @discord.ui.button(label="تعديل رسالة المغادرة", style=discord.ButtonStyle.blurple, row=1)
-    async def btn_edit_l(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🖼️ روابط الصور الترحيبية", style=discord.ButtonStyle.grey, row=1)
+    async def btn_edit_images(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للمدراء فقط!", ephemeral=True)
             return
-        await interaction.response.send_modal(LeaveTextModal())
-
-    @discord.ui.button(label="ترحيب الخاص: مفعل ❌", style=discord.ButtonStyle.red, row=2)
-    async def btn_dm_toggle(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ للمدراء فقط!", ephemeral=True)
-            return
-        MEGA_WELCOME_CONFIG['dm_welcome_enabled'] = not MEGA_WELCOME_CONFIG['dm_welcome_enabled']
-        self.refresh_labels()
-        await interaction.response.edit_message(view=self)
-
-    @discord.ui.button(label="تعديل رسالة الخاص", style=discord.ButtonStyle.blurple, row=2)
-    async def btn_edit_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ للمدراء فقط!", ephemeral=True)
-            return
-        await interaction.response.send_modal(DMTextModal())
-
-    @discord.ui.button(label="بطاقة الصورة: مفعل ✅", style=discord.ButtonStyle.green, row=3)
-    async def btn_card_toggle(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ للمدراء فقط!", ephemeral=True)
-            return
-        MEGA_WELCOME_CONFIG['card_enabled'] = not MEGA_WELCOME_CONFIG['card_enabled']
-        self.refresh_labels()
-        await interaction.response.edit_message(view=self)
-
-    @discord.ui.button(label="اختصارات الترحيب (Variables)", style=discord.ButtonStyle.gray, row=3)
-    async def btn_variables(self, interaction: discord.Interaction, button: discord.ui.Button):
-        vars_text = (
-            "📌 **قائمة الاختصارات المتاحة للاستخدام في النصوص:**\n\n"
-            "🔹 `[user]` أو `[userName]` ⟵ لإرسال منشن أو اسم العضو الجديد.\n"
-            "🔹 `[server]` ⟵ اسم السيرفر الحالي.\n"
-            "🔹 `[memberCount]` ⟵ عدد أعضاء السيرفر الحالي.\n"
-            "🔹 `[inviterName]` ⟵ اسم الشخص اللي دعى العضو.\n"
-            "🔹 `[invites]` ⟵ عدد دعوات الشخص الداعي.\n"
-            "🔹 `[accountCreated]` ⟵ تاريخ إنشاء حساب العضو."
-        )
-        await interaction.response.send_message(vars_text, ephemeral=True)
+        await interaction.response.send_modal(ImagesEditModal())
 
 
 # ==============================================================================
-# 🌟 Cog النظام المحصن للترحيب والمغادرة (Safe Welcome Cog)
+# 🌟 Cog النظام الرئيسي للترحيب والمغادرة
 # ==============================================================================
 class MegaWelcomeSystemCog(commands.Cog):
     def __init__(self, bot):
@@ -205,41 +262,24 @@ class MegaWelcomeSystemCog(commands.Cog):
         name="welcome",
         description="[نظام إمبراطوري موحد] لوحة التحكم والأزرار التفاعلية للترحيب والمغادرة"
     )
-    @app_commands.describe(
-        welcome_channel="تحديد روم الترحيب العام (اختياري)",
-        leave_channel="تحديد روم المغادرة (اختياري)",
-        autorole="تحديد الرتبة التلقائية عند الدخول (اختياري)"
-    )
     @app_commands.checks.has_permissions(administrator=True)
-    async def welcome_manager(
-        self,
-        interaction: discord.Interaction,
-        welcome_channel: Optional[discord.TextChannel] = None,
-        leave_channel: Optional[discord.TextChannel] = None,
-        autorole: Optional[discord.Role] = None,
-    ):
-        if welcome_channel:
-            MEGA_WELCOME_CONFIG["welcome_channel_id"] = welcome_channel.id
-        if leave_channel:
-            MEGA_WELCOME_CONFIG["leave_channel_id"] = leave_channel.id
-        if autorole:
-            MEGA_WELCOME_CONFIG["autorole_id"] = autorole.id
-            MEGA_WELCOME_CONFIG["autorole_enabled"] = True
-
+    async def welcome_manager(self, interaction: discord.Interaction):
         wch = MEGA_WELCOME_CONFIG["welcome_channel_id"]
         lch = MEGA_WELCOME_CONFIG["leave_channel_id"]
-        arh = MEGA_WELCOME_CONFIG["autorole_id"]
-        
+
         embed = discord.Embed(
-            title="⚙️ لوحة تحكم نظام الترحيب والمغادرة - ZIUO CORE",
+            title="⚡ لوحة تحكم إمبراطورية ZIUO - نظام الترحيب والفعاليات 〣",
             description=(
-                f"مرحباً بك في لوحة الإدارة المركزية لنظام الترحيب والأحداث.\n"
-                f"يمكنك التحكم بكافة الخصائص والإعدادات بسلاسة عبر الأزرار أدناه:\n\n"
+                "مرحباً بك في لوحة الإدارة المركزية المتطورة.\n"
+                "يمكنك التحكم بكافة الأجزاء بسلاسة عبر الأزرار أدناه:\n\n"
                 f"📥 **روم الترحيب:** {f'<#{wch}>' if wch else '`غير محدد ❌`'}\n"
                 f"📤 **روم المغادرة:** {f'<#{lch}>' if lch else '`غير محدد ❌`'}\n"
-                f"🛡️ **الرتبة التلقائية:** {f'<@&{arh}>' if MEGA_WELCOME_CONFIG['autorole_enabled'] and arh else '`معطلة ❌`'}\n"
-                f"🖼️ **صورة البطاقة:** [معاينة الرابط]({MEGA_WELCOME_CONFIG['card_image_url']})\n\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                f"🟢 **حالة الترحيب:** `{'مفعل ✅' if MEGA_WELCOME_CONFIG['welcome_enabled'] else 'معطل ❌'}`\n"
+                f"🔴 **حالة المغادرة:** `{'مفعل ✅' if MEGA_WELCOME_CONFIG['leave_enabled'] else 'معطل ❌'}`\n"
+                f"🖼️ **صورة البطاقة:** `{'مفعل ✅' if MEGA_WELCOME_CONFIG['card_enabled'] else 'معطل ❌'}`\n"
+                f"✉️ **ترحيب الخاص:** `{'مفعل ✅' if MEGA_WELCOME_CONFIG['dm_welcome_enabled'] else 'معطل ❌'}`\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "💡 **ملاحظة:** اضغط على الأزرار أدناه لتعديل الرومات، حالات الأنظمة، الرسائل، أو الصور فوراً!"
             ),
             color=0x2B2D31,
             timestamp=datetime.datetime.utcnow()
@@ -260,14 +300,6 @@ class MegaWelcomeSystemCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        if MEGA_WELCOME_CONFIG["autorole_enabled"] and MEGA_WELCOME_CONFIG["autorole_id"]:
-            try:
-                role = member.guild.get_role(MEGA_WELCOME_CONFIG["autorole_id"])
-                if role:
-                    await member.add_roles(role, reason="ZIUO Auto-Role System")
-            except Exception as e:
-                print(f"[AUTOROLE ERROR]: {e}")
-
         if MEGA_WELCOME_CONFIG["dm_welcome_enabled"]:
             try:
                 dm_text = self.format_text(MEGA_WELCOME_CONFIG["dm_message"], member, "خاص", 0)
@@ -286,9 +318,8 @@ class MegaWelcomeSystemCog(commands.Cog):
         if not channel:
             return
 
-        inviter_name = "رابط دعوة عامة / غير معروف"
+        inviter_name = "رابط عام"
         invites_count = 0
-        
         try:
             old_invites = MEGA_SERVER_INVITES_CACHE.get(member.guild.id, [])
             new_invites = await member.guild.invites()
@@ -301,24 +332,20 @@ class MegaWelcomeSystemCog(commands.Cog):
                             inviter_name = new_inv.inviter.name
                             invites_count = sum(inv.uses for inv in new_invites if inv.inviter and inv.inviter.id == new_inv.inviter.id)
                         break
-        except Exception as e:
-            print(f"[INVITE TRACKER ERROR]: {e}")
+        except Exception:
+            pass
 
         formatted_msg = self.format_text(MEGA_WELCOME_CONFIG["welcome_message"], member, inviter_name, invites_count)
 
         try:
+            embed = discord.Embed(color=0x2B2D31, description=formatted_msg)
             if MEGA_WELCOME_CONFIG["card_enabled"]:
-                embed = discord.Embed(color=0x2B2D31)
-                embed.description = formatted_msg
                 embed.set_image(url=MEGA_WELCOME_CONFIG["card_image_url"])
-                embed.set_author(name=member.guild.name, icon_url=member.guild.icon.url if member.guild.icon else None)
-                embed.set_footer(text=f"ID: {member.id} ✦ ZIUO Enterprise System")
-                embed.timestamp = datetime.datetime.utcnow()
-                await channel.send(embed=embed)
-            else:
-                await channel.send(formatted_msg)
+            embed.set_author(name=member.guild.name, icon_url=member.guild.icon.url if member.guild.icon else None)
+            embed.set_footer(text=f"ID: {member.id} ✦ ZIUO Enterprise")
+            await channel.send(embed=embed)
         except Exception as e:
-            print(f"[WELCOME SEND ERROR]: {e}")
+            print(f"[WELCOME ERROR]: {e}")
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
@@ -341,9 +368,12 @@ class MegaWelcomeSystemCog(commands.Cog):
         )
 
         try:
-            await channel.send(formatted_msg)
+            embed = discord.Embed(color=0xE74C3C, description=formatted_msg)
+            if MEGA_WELCOME_CONFIG["card_enabled"] and MEGA_WELCOME_CONFIG["leave_image_url"]:
+                embed.set_image(url=MEGA_WELCOME_CONFIG["leave_image_url"])
+            await channel.send(embed=embed)
         except Exception as e:
-            print(f"[LEAVE SEND ERROR]: {e}")
+            print(f"[LEAVE ERROR]: {e}")
 
 async def setup(bot):
     await bot.add_cog(MegaWelcomeSystemCog(bot))
