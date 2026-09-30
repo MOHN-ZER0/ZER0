@@ -5,7 +5,7 @@ import datetime
 from typing import Optional, Literal
 
 # ==============================================================================
-# 🌟 إعدادات وقاعدة بيانات نظام الترحيب والمغادرة الإمبراطوري الموحد
+# 🌟 إعدادات وقاعدة بيانات نظام الترحيب والمغادرة المحصن (Enterprise Safe Core)
 # ==============================================================================
 MEGA_WELCOME_CONFIG = {
     "welcome_enabled": True,
@@ -101,7 +101,7 @@ class MegaWelcomeControlView(discord.ui.View):
 
 
 # ==============================================================================
-# 🌟 Cog النظام الموحد للترحيب والمغادرة (Unified Welcome Cog)
+# 🌟 Cog النظام المحصن للترحيب والمغادرة (Safe Welcome Cog)
 # ==============================================================================
 class MegaWelcomeSystemCog(commands.Cog):
     def __init__(self, bot):
@@ -111,17 +111,16 @@ class MegaWelcomeSystemCog(commands.Cog):
         for guild in self.bot.guilds:
             try:
                 MEGA_SERVER_INVITES_CACHE[guild.id] = await guild.invites()
-            except:
-                pass
+            except Exception as e:
+                print(f"[CACHE LOAD ERROR for {guild.name}]: {e}")
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild):
         try:
             MEGA_SERVER_INVITES_CACHE[guild.id] = await guild.invites()
-        except:
-            pass
+        except Exception as e:
+            print(f"[GUILD JOIN INVITES ERROR]: {e}")
 
-    # 🎛️ أمر موحد وخارق لإدارة وتعديل كل شيء (بدون كثرة أوامر)
     @app_commands.command(
         name="welcome",
         description="[نظام إمبراطوري موحد] لوحة التحكم والتحكم الحر بنصوص وإعدادات الترحيب والمغادرة"
@@ -155,7 +154,6 @@ class MegaWelcomeSystemCog(commands.Cog):
         custom_text: Optional[str] = None,
         image_url: Optional[str] = None
     ):
-        # 1. لوحة التحكم الرئيسية
         if action == "setup":
             if welcome_channel:
                 MEGA_WELCOME_CONFIG["welcome_channel_id"] = welcome_channel.id
@@ -183,7 +181,6 @@ class MegaWelcomeSystemCog(commands.Cog):
             await interaction.response.send_message(embed=embed, view=MegaWelcomeControlView(), ephemeral=True)
             return
 
-        # 2. تعديل رسالة الترحيب
         if action == "set_welcome":
             if not custom_text:
                 await interaction.response.send_message("❌ **يجب كتابة النص الجديد في خانة `custom_text`!**", ephemeral=True)
@@ -197,7 +194,6 @@ class MegaWelcomeSystemCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        # 3. تعديل رسالة المغادرة
         if action == "set_leave":
             if not custom_text:
                 await interaction.response.send_message("❌ **يجب كتابة النص الجديد في خانة `custom_text`!**", ephemeral=True)
@@ -206,7 +202,6 @@ class MegaWelcomeSystemCog(commands.Cog):
             await interaction.response.send_message(f"✅ **تم تحديث رسالة المغادرة بنجاح!**\n> المعاينة:\n{custom_text}", ephemeral=True)
             return
 
-        # 4. تعديل رسالة الخاص DM
         if action == "set_dm":
             if not custom_text:
                 await interaction.response.send_message("❌ **يجب كتابة النص الجديد في خانة `custom_text`!**", ephemeral=True)
@@ -216,7 +211,6 @@ class MegaWelcomeSystemCog(commands.Cog):
             await interaction.response.send_message(f"✅ **تم تحديث وتفعيل رسالة الخاص (DM) بنجاح!**\n> المعاينة:\n{custom_text}", ephemeral=True)
             return
 
-        # 5. تغيير خلفية البطاقة
         if action == "set_card":
             if not image_url:
                 await interaction.response.send_message("❌ **يجب وضع رابط الصورة المباشر في خانة `image_url`!**", ephemeral=True)
@@ -225,7 +219,6 @@ class MegaWelcomeSystemCog(commands.Cog):
             await interaction.response.send_message(f"🖼️ **تم تغيير خلفية البطاقة الترحيبية بنجاح!**\n> الرابط: {image_url}", ephemeral=True)
             return
 
-        # 6. محاكاة وتجربة الترحيب
         if action == "test":
             member = interaction.user
             formatted_msg = (
@@ -261,24 +254,27 @@ class MegaWelcomeSystemCog(commands.Cog):
                 .replace("[accountCreated]", member.created_at.strftime("%Y-%m-%d"))
         )
 
-    # 📥 أحداث دخول الأعضاء (الترحيب، الرتبة التلقائية، تتبع الدعوات، والخاص)
+    # 📥 حدث دخول العضو (محصن بالكامل ضد الانهيار)
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
+        # 1. الرتبة التلقائية
         if MEGA_WELCOME_CONFIG["autorole_enabled"] and MEGA_WELCOME_CONFIG["autorole_id"]:
             try:
                 role = member.guild.get_role(MEGA_WELCOME_CONFIG["autorole_id"])
                 if role:
                     await member.add_roles(role, reason="ZIUO Auto-Role System")
             except Exception as e:
-                print(f"[AUTOROLE ERROR] {e}")
+                print(f"[AUTOROLE ERROR]: {e}")
 
+        # 2. رسالة الخاص
         if MEGA_WELCOME_CONFIG["dm_welcome_enabled"]:
             try:
                 dm_text = MEGA_WELCOME_CONFIG["dm_message"].replace("[userName]", member.name).replace("[server]", member.guild.name)
                 await member.send(dm_text)
-            except:
+            except Exception:
                 pass
 
+        # 3. التحقق من تفعيل الترحيب وروم الترحيب
         if not MEGA_WELCOME_CONFIG["welcome_enabled"]:
             return
 
@@ -292,6 +288,8 @@ class MegaWelcomeSystemCog(commands.Cog):
 
         inviter_name = "رابط دعوة عامة / غير معروف"
         invites_count = 0
+        
+        # محاولة تتبع الدعوات بشكل آمن تماماً (لن يوقف النظام لو فشل)
         try:
             old_invites = MEGA_SERVER_INVITES_CACHE.get(member.guild.id, [])
             new_invites = await member.guild.invites()
@@ -305,7 +303,7 @@ class MegaWelcomeSystemCog(commands.Cog):
                             invites_count = sum(inv.uses for inv in new_invites if inv.inviter and inv.inviter.id == new_inv.inviter.id)
                         break
         except Exception as e:
-            print(f"[INVITE TRACKER ERROR] {e}")
+            print(f"[INVITE TRACKER SAFE BYPASS]: {e}")
 
         formatted_msg = self.format_text(MEGA_WELCOME_CONFIG["welcome_message"], member, inviter_name, invites_count)
 
@@ -321,7 +319,7 @@ class MegaWelcomeSystemCog(commands.Cog):
             else:
                 await channel.send(formatted_msg)
         except Exception as e:
-            print(f"[WELCOME ERROR] {e}")
+            print(f"[WELCOME SEND ERROR]: {e}")
 
     # 📤 حدث مغادرة العضو
     @commands.Cog.listener()
@@ -347,7 +345,7 @@ class MegaWelcomeSystemCog(commands.Cog):
         try:
             await channel.send(formatted_msg)
         except Exception as e:
-            print(f"[LEAVE ERROR] {e}")
+            print(f"[LEAVE SEND ERROR]: {e}")
 
 async def setup(bot):
     await bot.add_cog(MegaWelcomeSystemCog(bot))
