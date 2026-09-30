@@ -67,8 +67,8 @@ class ZiuoEnterpriseAutoTrapCog(commands.Cog):
         ],
         reply_type=[
             app_commands.Choice(name="رسالة نصية عادية (Text)", value="text"),
-            app_Choice_embed=app_commands.Choice(name="قالب إمبد احترافي (Embed)", value="embed"),
-            app_Choice_none=app_commands.Choice(name="بدون رسالة (تنفيذ الإجراء فقط)", value="none")
+            app_commands.Choice(name="قالب إمبد احترافي (Embed)", value="embed"),
+            app_commands.Choice(name="بدون رسالة (تنفيذ الإجراء فقط)", value="none")
         ]
     )
     @app_commands.checks.has_permissions(administrator=True)
