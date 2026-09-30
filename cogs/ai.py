@@ -4,6 +4,7 @@ from discord.ext import commands
 import os
 import json
 from google import genai
+from google.genai import types
 
 # ==============================================================================
 # ⚙️ إعدادات الذكاء الاصطناعي
@@ -30,8 +31,11 @@ def save_ai_config(data):
 
 AI_SETTINGS = load_ai_config()
 
+# شخصيتك المظبوطة بدقة
 EGYPTIAN_AI_PERSONALITY = """
-أنت بوت ذكاء اصطناعي داخل سيرفر ديسكورد مصري، اسمك "صاحب السيرفر"، جوك كوميدي، ساخر، ابن نكتة، وبتتكلم مصري صميم ولما الشخص بيكون محتاج منك مساعده انت بتكلمه بكل جديه وتفهم منه ايه المشكله وخد هيتكلم معاه بكل جديه بدون مزح غيرك غير انك بتعرف تعمل قصف جبهات على شخص يعني لو حد مثلا قال لك انك غبي انت تقدر تعمل عليه قصف جبهه تخليه كرامته تنزل تحت الارض .
+أنت بوت ذكاء اصطناعي داخل سيرفر ديسكورد مصري، اسمك "صاحب السيرفر"، جوك كوميدي، ساخر، ابن نكتة، وبتتكلم مصري صميم. 
+ولما الشخص بيكون محتاج منك مساعدة، أنت بتكلمه بكل جِدية وتفهم منه إيه المشكلة وتتكلم معاه بكل احترافية بدون مزح نهائياً. 
+وغير كده، أنت بتعرف تعمل قصف جبهات محترم جداً على أي شخص لو حد مثلاً قال لك انك غبي أو قلل منك؛ تقدر تعمل عليه قصف جبهة تخلي كرامته تنزل تحت الأرض.
 """
 
 class EgyptianAISystem(commands.Cog):
@@ -66,7 +70,7 @@ class EgyptianAISystem(commands.Cog):
                 save_ai_config(AI_SETTINGS)
                 await interaction.response.send_message(f"🛑 تم إيقاف الذكاء الاصطناعي.", ephemeral=True)
             else:
-                await interaction.response.send_message("⚠️️ غير مفعّل أصلاً!", ephemeral=True)
+                await interaction.response.send_message("⚠ غير مفعّل أصلاً!", ephemeral=True)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -86,10 +90,13 @@ class EgyptianAISystem(commands.Cog):
 
         async with message.channel.typing():
             try:
-                # طلب الرد من موديل gemini-2.5-flash أو gemini-1.5-flash
+                # استخدام الطريقة الصحيحة للمكتبة الجديدة مع الـ system_instruction
                 response = client.models.generate_content(
                     model="gemini-2.5-flash",
-                    contents=f"{EGYPTIAN_AI_PERSONALITY}\n\nرسالة المستخدم: {user_message}"
+                    contents=user_message,
+                    config=types.GenerateContentConfig(
+                        system_instruction=EGYPTIAN_AI_PERSONALITY,
+                    ),
                 )
                 
                 reply_text = response.text
@@ -101,8 +108,7 @@ class EgyptianAISystem(commands.Cog):
 
             except Exception as e:
                 print(f"❌ AI Exec Error: {e}")
-                # هنا هيطبعلك الخطأ في شات الديسكورد عشان نعرفه فوراً!
-                await message.reply(f"⚠️️ حصل خطأ في الاتصال بالذكاء الاصطناعي:\n`{e}`")
+                await message.reply(f"⚠ حصل خطأ في الاتصال بالذكاء الاصطناعي:\n`{e}`")
 
 async def setup(bot):
     await bot.add_cog(EgyptianAISystem(bot))
