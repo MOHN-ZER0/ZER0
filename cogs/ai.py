@@ -3,16 +3,13 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import json
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 
 # ==============================================================================
-# ⚙️ إعدادات الذكاء الاصطناعي
+# ⚙️ إعدادات الذكاء الاصطناعي (بالمكتبة الأصلية المستقرة)
 # ==============================================================================
 GEMINI_API_KEY = "AQ.Ab8RN6K-6d8IE7eB_rH0hxsD2TI6Kx6tYgSJUrf7beUz2-h3tw"
-
-# إنشاء العميل
-client = genai.Client(api_key=GEMINI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 
 CONFIG_FILE = "ai_system_config.json"
 
@@ -31,7 +28,7 @@ def save_ai_config(data):
 
 AI_SETTINGS = load_ai_config()
 
-# شخصيتك المظبوطة بدقة
+# شخصيتك المظبوطة بالمللي
 EGYPTIAN_AI_PERSONALITY = """
 أنت بوت ذكاء اصطناعي داخل سيرفر ديسكورد مصري، اسمك "صاحب السيرفر"، جوك كوميدي، ساخر، ابن نكتة، وبتتكلم مصري صميم. 
 ولما الشخص بيكون محتاج منك مساعدة، أنت بتكلمه بكل جِدية وتفهم منه إيه المشكلة وتتكلم معاه بكل احترافية بدون مزح نهائياً. 
@@ -81,6 +78,7 @@ class EgyptianAISystem(commands.Cog):
         is_channel_enabled = (guild_id in AI_SETTINGS and message.channel.id in AI_SETTINGS[guild_id]["channels"])
         is_bot_mentioned = self.bot.user.mentioned_in(message)
 
+调整后的 is_channel_enabled و is_bot_mentioned... (نفس المنطق)
         if not is_channel_enabled and not is_bot_mentioned:
             return
 
@@ -90,15 +88,13 @@ class EgyptianAISystem(commands.Cog):
 
         async with message.channel.typing():
             try:
-                # استخدام الطريقة الصحيحة للمكتبة الجديدة مع الـ system_instruction
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=user_message,
-                    config=types.GenerateContentConfig(
-                        system_instruction=EGYPTIAN_AI_PERSONALITY,
-                    ),
+                # استخدام الموديل مع system_instruction المدعوم بامتياز هنا
+                model = genai.GenerativeModel(
+                    model_name="gemini-1.5-flash",
+                    system_instruction=EGYPTIAN_AI_PERSONALITY
                 )
                 
+                response = model.generate_content(user_message)
                 reply_text = response.text
 
                 if len(reply_text) > 1990:
@@ -108,7 +104,7 @@ class EgyptianAISystem(commands.Cog):
 
             except Exception as e:
                 print(f"❌ AI Exec Error: {e}")
-                await message.reply(f"⚠ حصل خطأ في الاتصال بالذكاء الاصطناعي:\n`{e}`")
+                await message.reply(f"⚠ يا اسطى حصل خطأ فني:\n`{e}`")
 
 async def setup(bot):
     await bot.add_cog(EgyptianAISystem(bot))
