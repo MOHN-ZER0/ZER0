@@ -6,9 +6,9 @@ import json
 from openai import OpenAI
 
 # ==============================================================================
-# ⚙️ إعدادات OpenAI API
+# ⚙️️ إعدادات OpenAI API (المفتاح الجديد)
 # ==============================================================================
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = "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"
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 CONFIG_FILE = "ai_system_config.json"
