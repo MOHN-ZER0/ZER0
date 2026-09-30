@@ -3,13 +3,13 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import json
-import google.generativeai as genai
+from google import genai
 
 # ==============================================================================
-# ⚙️ إعدادات وتكوين الذكاء الاصطناعي (مفتاحك جاهز وشغال يا معلم)
+# ⚙️ إعدادات وتكوين الذكاء الاصطناعي (باستخدام مكتبة جوجل الجديدة)
 # ==============================================================================
 GEMINI_API_KEY = "AQ.Ab8RN6K-6d8IE7eB_rH0hxsD2TI6Kx6tYgSJUrf7beUz2-h3tw"
-genai.configure(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 CONFIG_FILE = "ai_system_config.json"
 
@@ -98,13 +98,15 @@ class EgyptianAISystem(commands.Cog):
 
         async with message.channel.typing():
             try:
-                # استخدام موديل Gemini 1.5 Flash السريع والرهيب في الردود
-                model = genai.GenerativeModel(
-                    model_name="gemini-1.5-flash",
-                    system_instruction=EGYPTIAN_AI_PERSONALITY
+                # استخدام الطريقة الحديثة الرسمية لطلب الرد من نموذج Gemini 1.5 Flash
+                response = client.models.generate_content(
+                    model="gemini-1.5-flash",
+                    contents=user_message,
+                    config={
+                        'system_instruction': EGYPTIAN_AI_PERSONALITY
+                    }
                 )
                 
-                response = model.generate_content(user_message)
                 reply_text = response.text
 
                 if len(reply_text) > 1990:
