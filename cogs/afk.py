@@ -13,17 +13,16 @@ class AFKSystemCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # 1. أمر السلاش /afk بوصف رسمي ومحدد
+    # 1. أمر السلاش /afk بردود حية وكوميدية
     @app_commands.command(
         name="afk",
         description="الدخول في وضع الـ AFK"
     )
     @app_commands.describe(reason="السبب وراء خروجك (اختياري)")
-    async def slash_afk(self, interaction: discord.Interaction, reason: str = "مشغول حالياً 🕵️‍♂️"):
+    async def slash_afk(self, interaction: discord.Interaction, reason: str = "مشغول في مصلحة سرية 🕵️‍♂️"):
         user_id = interaction.user.id
         current_time = time.time()
         
-        # ميزة ذكية: لو العضو مسجل AFK بالفعل وتم تحديث أمره
         is_update = user_id in AFK_USERS_DATABASE
         
         AFK_USERS_DATABASE[user_id] = {
@@ -31,16 +30,17 @@ class AFKSystemCog(commands.Cog):
             "time": current_time if not is_update else AFK_USERS_DATABASE[user_id]["time"]
         }
 
+        if is_update:
+            msg = f"🔄 يا عم إنت لسه قايل رايح فين! ماشي يا سيدي، **عدلنا السبب** وخليناه: `{reason}`.. كمل غيابك على نظافة بقى 😂"
+        else:
+            msg = f"☕ استريح يا بطل `{interaction.user.name}`، قطعت كارت إنك غايب وخلاص!\n📌 السبب الموثق: `{reason}`\n🤖 *توكل على الله ومتقلقش، واقفين حراس لأي حد يمنشنك!*"
+
         embed = discord.Embed(
-            description=(
-                f"🚨 **{ '🔄 تم تحديث' if is_update else '🚨 تم تفعيل' } وضع الـ AFK للعضو `{interaction.user.name}` بنجاح!**\n\n"
-                f"📌 **السبب:** `{reason}`\n\n"
-                f"🤖 *سيتم الرد على أي شخص يقوم بمنشنك حتى تقوم بالعودة.*"
-            ),
+            description=msg,
             color=0xF1C40F,
             timestamp=datetime.datetime.utcnow()
         )
-        embed.set_footer(text="ZIUO AFK System ✦ ترجع بالسلامة")
+        embed.set_footer(text="ZIUO AFK System ✦ ترجع بالسلامة يا فنان")
         await interaction.response.send_message(embed=embed)
 
     # 2. الاستماع للرسائل (كتابة عادية، فك الـ AFK، والرد الكوميدي على المنشنات)
@@ -51,7 +51,7 @@ class AFKSystemCog(commands.Cog):
 
         user_id = message.author.id
 
-        # أ. إذا رجع العضو وكتب رسالة -> فك الـ AFK والرد برسالة ثابتة لا تُحذف للكل
+        # أ. إذا رجع العضو وكتب رسالة -> فك الـ AFK برد حماسي وكوميدي
         if user_id in AFK_USERS_DATABASE:
             afk_data = AFK_USERS_DATABASE.pop(user_id)
             start_time = afk_data["time"]
@@ -68,13 +68,13 @@ class AFKSystemCog(commands.Cog):
 
             if hours > 0 or minutes >= 30:
                 comedy_reply = (
-                    f"😂 **إيه يا اسطى هو إنت غبت `{time_str}` عشان `{reason}`؟!**\n"
-                    f"يا راجل ده إحنا كنا قربنا نفتح عزاء ونقسم تركتك في السيرفر! نورت يا عريس 🦅"
+                    f"😂 **يا هلا باللي نور الكل! إيه يا اسطى هو إنت غبت `{time_str}` عشان `{reason}`؟!**\n"
+                    f"يا راجل ده إحنا كنا خلاص هنفرش العزاء ونقسم تركتك في السيرفر.. حمدالله على السلامة يا عريس 🦅"
                 )
             else:
                 comedy_reply = (
-                    f"😏 **متأخرتش يعني.. طيب كويس، يعني كنت قاعد `{time_str}`.**\n"
-                    f"بس الصراحة أنا كنت حاسه إنك عامل كده تمثيل وخلاص عشان تشغل الناس بيك! منور يا بطل ✨"
+                    f"😏 **أوووه، الحج ظهر والنور طرد العتمة! يعني كنت قاعد `{time_str}` بس؟**\n"
+                    f"بس الصراحة الصراحة.. أنا كنت حاسس إنك عامل الحوار ده تمثيل وخلاص عشان تشغل الناس بيك! منور يا بطل ✨"
                 )
 
             welcome_back_embed = discord.Embed(
@@ -88,11 +88,11 @@ class AFKSystemCog(commands.Cog):
             except Exception:
                 pass
 
-        # ب. التفعيل السريع بالكتابة العادية في الشات مع ميزة منع التكرار الذكية
+        # ب. التفعيل السريع بالكتابة العادية في الشات (مثال: afk رايح أشرب)
         content_lower = message.content.strip().lower()
         if content_lower.startswith("afk ") or content_lower.startswith("باَفْك ") or content_lower.startswith("بافك "):
             parts = message.content.split(maxsplit=1)
-            reason = parts[1] if len(parts) > 1 else "قاعد بيخلص مصلحة وراجع 🚶‍♂️"
+            reason = parts[1] if len(parts) > 1 else "بيعمل حاجات مهمة وراجع 🚶‍♂️"
             
             is_update = user_id in AFK_USERS_DATABASE
             
@@ -101,12 +101,13 @@ class AFKSystemCog(commands.Cog):
                 "time": time.time() if not is_update else AFK_USERS_DATABASE[user_id]["time"]
             }
 
+            if is_update:
+                quick_msg = f"🔄 يابن الحلال إنت لسه مفعله! بس ولا يهمك، غيرنا السبب وخليناه: `{reason}`.. كمل مشوارك 😂"
+            else:
+                quick_msg = f"🚀 تمام يا فنان `{message.author.name}`، طار في وضع الـ AFK!\n📝 السبب: `{reason}`\n☕ سيبك من الشات خالص وأنا هظبط أي حد يجيب سيرتك."
+
             quick_embed = discord.Embed(
-                description=(
-                    f"⚡ **{ '🔄 تم تحديث' if is_update else '⚡ تم تفعيل' } وضع الـ AFK لـ `{message.author.name}` بنجاح!**\n"
-                    f"📝 **السبب:** `{reason}`\n\n"
-                    f"☕ سيتم إبلاغ الجميع عند محاولة منشنك."
-                ),
+                description=quick_msg,
                 color=0xE67E22,
                 timestamp=datetime.datetime.utcnow()
             )
@@ -116,7 +117,7 @@ class AFKSystemCog(commands.Cog):
                 pass
             return
 
-        # ج. الرد الكوميدي الساخر على منشن الأعضاء الغائبين (مرئية للكل وثابتة)
+        # ج. الرد الكوميدي الساخر على منشن الأعضاء الغائبين
         if message.mentions:
             for mentioned_user in message.mentions:
                 if mentioned_user.id in AFK_USERS_DATABASE:
@@ -134,16 +135,16 @@ class AFKSystemCog(commands.Cog):
 
                     comedy_embed = discord.Embed(
                         description=(
-                            f"⚠️ **يا اسطى `{message.author.name}` سيبه في حاله شوية يا عم!**\n"
-                            f"هو تقريباً `{mentioned_user.name}` عمل حركة الـ AFK دي عشان يهرب منك أصلاً 😂\n\n"
+                            f"⚠️ **يا عم `{message.author.name}` بالراحة عليه شوية سيبه في حاله!**\n"
+                            f"هو تقريباً `{mentioned_user.name}` عمل حركة الـ AFK دي هرباً من إزعاجك الكوميدي أصلاً 😂\n\n"
                             f"📌 **السبب اللي كاتبه:** `{reason}`\n"
                             f"⏱️ **غایب بقاله:** `{time_str}`\n\n"
-                            f"🤖 *بطل منشنات بقى لحد ما يشرف لوحده!*"
+                            f"🤖 *ريح نفسك وبطل منشنات، مش هيرد عليك غير لما يشرف بنفسه!*"
                         ),
                         color=0xE74C3C,
                         timestamp=datetime.datetime.utcnow()
                     )
-                    comedy_embed.set_footer(text="ZIUO Comedy Protection ✦ الشخص مشغول حالياً")
+                    comedy_embed.set_footer(text="ZIUO Comedy Protection ✦ الشخص مشغول وبايع السيرفر حالياً")
                     try:
                         await message.reply(embed=comedy_embed)
                     except Exception:
