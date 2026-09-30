@@ -7,7 +7,7 @@ import os
 from typing import Optional, Literal
 
 # ==============================================================================
-# 🌟 قاعدة البيانات ونظام الذاكرة المركزي لنظام التفاعل التلقائي الخارق
+# 🌟 قاعدة البيانات المركزية لنظام التفاعل التلقائي الخارق
 # ==============================================================================
 MEGA_AUTOTRAP_DB_FILE = "ziuo_mega_autotrap_database.json"
 
@@ -26,37 +26,41 @@ def save_autotrap_db(data):
 
 
 # ==============================================================================
-# 🌟 الـ Cog العملاق والمتكامل لإدارة التفاعلات والأنظمة الذكية (Mega Engine)
+# 🌟 الـ Cog العملاق والمبسط لإدارة التفاعلات والأنظمة الذكية (أمر واحد شامل)
 # ==============================================================================
 class ZiuoEnterpriseAutoTrapCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.database = load_autotrap_db()
 
-    # 1. أمر إنشاء وتكوين قاعدة تفاعل تلقائي شاملة بالاسم (Full Customization)
     @app_commands.command(
-        name="autotrap_create",
-        description="[نظام إمبراطوري] إنشاء قاعدة تفاعل وتدفق تلقائي ذكي جديدة باسم مخصص"
+        name="autotrap",
+        description="[نظام إمبراطوري موحد] إنشاء، تعديل، حذف أو استعراض قواعد التفاعل التلقائي"
     )
     @app_commands.describe(
-        action_name="اسم فريد للقاعدة (مثال: support_system أو design_chat)",
-        channel="الروم المستهدفة لهذه القاعدة",
-        system_type="اختر نوع النظام الذكي المراد تطبيقه",
-        custom_keyword="الكلمة المفتاحية (خاصة بنظام تفاعلات الكلمات أو التنبيهات)",
-        reply_type="نوع الإرسال: text, embed, none",
+        action="الإجراء المطلوب تنفيذه على القاعدة",
+        action_name="اسم القاعدة الفريد (مثل: support أو welcome)",
+        channel="الروم المستهدفة (مطلوبة عند الإنشاء)",
+        system_type="نوع النظام الذكي المراد تطبيقه",
+        custom_keyword="الكلمة المفتاحية (اختياري)",
+        reply_type="نوع الرد (text أو embed أو none)",
         message_content="محتوى الرد أو نص الإمبد (يدعم [user], [userName], [server])",
         image_url="رابط صورة مباشر مرفق (اختياري)",
-        reactions="الإيموجيات التلقائية مفصولة بمسافة (مثال: 🎨 📷 👍)",
-        target_role="رتبة يتم منشنها تلقائياً (خاص بنظام تنبيه الرتب)",
-        button_label="عنوان زر تفاعلي خارجي (اختياري)",
-        button_url="رابط الزر التفاعلي الخارجي (اختياري)",
-        allow_bots="السماح بتفاعل البوت مع البوتات الأخرى (True/False)"
+        reactions="الإيموجيات التلقائية مفصولة بمسافة (مثال: 👍 ❤️)",
+        target_role="رتبة يتم منشنها تلقائياً (اختياري)",
+        allow_bots="السماح بتفاعل البوت مع البوتات الأخرى (True / False)"
     )
     @app_commands.choices(
+        action=[
+            app_commands.Choice(name="إنشاء قاعدة جديدة (Create)", value="create"),
+            app_commands.Choice(name="تعديل قاعدة موجودة (Edit)", value="edit"),
+            app_commands.Choice(name="حذف قاعدة (Remove)", value="remove"),
+            app_commands.Choice(name="استعراض القواعد (List)", value="list")
+        ],
         system_type=[
             app_commands.Choice(name="1. تفاعلات إيموجي ذكية حسب الكلمات (Keyword Reactions)", value="keyword_emoji"),
             app_commands.Choice(name="2. فتح سلسلة نقاش تلقائية Thread (Auto-Thread)", value="auto_thread"),
-            app_commands.Choice(name="3. رسالة ترحيب أو رد مع أزرار وصور (Media & Button Trap)", value="media_trap"),
+            app_commands.Choice(name="3. رسالة ترحيب أو رد مع صور (Media & Button Trap)", value="media_trap"),
             app_commands.Choice(name="4. حماية الروابط ومنع السبام (Anti-Link / Spam Shield)", value="anti_spam"),
             app_commands.Choice(name="5. منشن رتبة معينة عند الطلب (Role Mention Trigger)", value="role_mention"),
             app_commands.Choice(name="6. تصويت تلقائي للاقتراحات (Voting Polls Reactions)", value="voting_polls")
@@ -68,172 +72,130 @@ class ZiuoEnterpriseAutoTrapCog(commands.Cog):
         ]
     )
     @app_commands.checks.has_permissions(administrator=True)
-    async def autotrap_create(
+    async def autotrap_manager(
         self,
         interaction: discord.Interaction,
-        action_name: str,
-        channel: discord.TextChannel,
-        system_type: str,
+        action: Literal["create", "edit", "remove", "list"],
+        action_name: Optional[str] = None,
+        channel: Optional[discord.TextChannel] = None,
+        system_type: Optional[str] = "keyword_emoji",
         custom_keyword: Optional[str] = None,
-        reply_type: Literal["text", "embed", "none"] = "text",
+        reply_type: Optional[Literal["text", "embed", "none"]] = "text",
         message_content: Optional[str] = None,
         image_url: Optional[str] = None,
         reactions: Optional[str] = None,
         target_role: Optional[discord.Role] = None,
-        button_label: Optional[str] = None,
-        button_url: Optional[str] = None,
-        allow_bots: bool = False
+        allow_bots: Optional[bool] = False
     ):
         guild_id = str(interaction.guild.id)
-        rule_key = action_name.lower().strip()
-
         if guild_id not in self.database:
             self.database[guild_id] = {}
 
-        if rule_key in self.database[guild_id]:
-            await interaction.response.send_message(f"❌ **عذراً، توجد قاعدة مسجلة بهذا الاسم مسبقاً (`{rule_key}`). قم بتعديلها أو حذفها أولاً!**", ephemeral=True)
-            return
+        # 1. استعراض القواعد (List)
+        if action == "list":
+            if not self.database[guild_id]:
+                await interaction.response.send_message("📌 **لا توجد أي قواعد تفاعل تلقائي مسجلة في هذا السيرفر حالياً.**", ephemeral=True)
+                return
 
-        reactions_list = [r.strip() for r in reactions.split()] if reactions else []
-
-        self.database[guild_id][rule_key] = {
-            "channel_id": channel.id,
-            "system_type": system_type,
-            "custom_keyword": custom_keyword.lower().strip() if custom_keyword else "",
-            "reply_type": reply_type,
-            "message_content": message_content or "",
-            "image_url": image_url or "",
-            "reactions": reactions_list,
-            "target_role_id": target_role.id if target_role else None,
-            "button_label": button_label or "",
-            "button_url": button_url or "",
-            "allow_bots": allow_bots,
-            "author_id": interaction.user.id,
-            "created_at": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-        }
-        save_autotrap_db(self.database)
-
-        embed = discord.Embed(
-            title="⚡ ╎ تـم إنـشـاء قـاعـدة الـتـفـاعـل الـتـلـقـائـي بنجاح تام",
-            description=(
-                f"> 📌 **اسم القاعدة:** `{rule_key}`\n"
-                f"> ⚙️ **نوع النظام:** `{system_type}`\n"
-                f"> 📂 **الروم المستهدفة:** {channel.mention}\n"
-                f"> 🔑 **الكلمة المفتاحية:** `{custom_keyword if custom_keyword else 'عام (لكافة الرسائل)'}`\n"
-                f"> ✨ **الرياكشنات:** `{', '.join(reactions_list) if reactions_list else 'لا يوجد'}`"
-            ),
-            color=0x2ECC71,
-            timestamp=datetime.datetime.utcnow()
-        )
-        embed.set_footer(text="ZIUO Enterprise Autonomous Engine")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # 2. أمر تعديل وتحديث أي قاعدة مسجلة بالاسم (حرية مطلقة بالتعديل)
-    @app_commands.command(
-        name="autotrap_edit",
-        description="[إدارة حرة] تعديل وتحديث أي قاعدة تفاعل تلقائي مسجلة مسبقاً بالاسم"
-    )
-    @app_commands.describe(
-        action_name="اسم القاعدة المراد تعديلها",
-        channel="روم جديدة (اختياري)",
-        custom_keyword="كلمة مفتاحية جديدة (اختياري)",
-        message_content="محتوى نصي جديد (اختياري)",
-        image_url="رابط صورة جديد (اختياري)",
-        reactions="رياكشنات جديدة مفصولة بمسافة (اختياري)"
-    )
-    @app_commands.checks.has_permissions(administrator=True)
-    async def autotrap_edit(
-        self,
-        interaction: discord.Interaction,
-        action_name: str,
-        channel: Optional[discord.TextChannel] = None,
-        custom_keyword: Optional[str] = None,
-        message_content: Optional[str] = None,
-        image_url: Optional[str] = None,
-        reactions: Optional[str] = None
-    ):
-        guild_id = str(interaction.guild.id)
-        rule_key = action_name.lower().strip()
-
-        if guild_id not in self.database or rule_key not in self.database[guild_id]:
-            await interaction.response.send_message(f"❌ **عذراً، لا توجد قاعدة مسجلة بهذا الاسم:** `{rule_key}`", ephemeral=True)
-            return
-
-        rule = self.database[guild_id][rule_key]
-
-        if channel:
-            rule["channel_id"] = channel.id
-        if custom_keyword is not None:
-            rule["custom_keyword"] = custom_keyword.lower().strip()
-        if message_content is not None:
-            rule["message_content"] = message_content
-        if image_url is not None:
-            rule["image_url"] = image_url
-        if reactions is not None:
-            rule["reactions"] = [r.strip() for r in reactions.split()]
-
-        save_autotrap_db(self.database)
-
-        embed = discord.Embed(
-            title="✅ ╎ تـم تـحـديـث وقـاعـدة الـتـفـاعـل الـتـلـقـائـي بنجاح",
-            description=f"> تم تحديث القاعدة **`{rule_key}`** وتطبيق كافة التعديلات الفورية بنجاح.",
-            color=0x3498DB,
-            timestamp=datetime.datetime.utcnow()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # 3. أمر حذف قاعدة بالاسم
-    @app_commands.command(
-        name="autotrap_remove",
-        description="[إدارة حرة] حذف وإزالة أي قاعدة تفاعل تلقائي بالاسم"
-    )
-    @app_commands.describe(action_name="اسم القاعدة المراد إزالتها نهائياً")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def autotrap_remove(self, interaction: discord.Interaction, action_name: str):
-        guild_id = str(interaction.guild.id)
-        rule_key = action_name.lower().strip()
-
-        if guild_id in self.database and rule_key in self.database[guild_id]:
-            del self.database[guild_id][rule_key]
-            save_autotrap_db(self.database)
-            await interaction.response.send_message(f"🗑️ **تم بنجاح حذف قاعدة التفاعل التلقائي:** `{rule_key}`", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"❌ **لم يتم العثور على قاعدة بهذا الاسم:** `{rule_key}`", ephemeral=True)
-
-    # 4. أمر استعراض القواعد بالأسماء والتفاصيل
-    @app_commands.command(
-        name="autotrap_list",
-        description="[استعراض شامل] عرض كافة قواعد التفاعل التلقائي وأسمائها ونوع أنظمتها المفعلة"
-    )
-    @app_commands.checks.has_permissions(administrator=True)
-    async def autotrap_list(self, interaction: discord.Interaction):
-        guild_id = str(interaction.guild.id)
-        if guild_id not in self.database or not self.database[guild_id]:
-            await interaction.response.send_message("📌 **لا توجد أي قواعد تفاعل تلقائي مسجلة في هذا السيرفر حالياً.**", ephemeral=True)
-            return
-
-        embed = discord.Embed(
-            title="📋 ╎ قـائـمـة قـواعـد الـتـفـاعـل الـتـلـقـائـي الإمبراطورية",
-            color=0x2B2D31,
-            timestamp=datetime.datetime.utcnow()
-        )
-
-        for name, data in self.database[guild_id].items():
-            ch = interaction.guild.get_channel(data["channel_id"])
-            ch_mention = ch.mention if ch else "`روم محذوف`"
-            embed.add_field(
-                name=f"⚡ اسم القاعدة: `{name}`",
-                value=(
-                    f"> ⚙️ النظام: `{data['system_type']}`\n"
-                    f"> 📂 الروم: {ch_mention}\n"
-                    f"> 🔑 الكلمة: `{data['custom_keyword'] if data['custom_keyword'] else 'عام'}`"
-                ),
-                inline=False
+            embed = discord.Embed(
+                title="📋 ╎ قـائـمـة قـواعـد الـتـفـاعـل الـتـلـقـائـي الإمبراطورية",
+                color=0x2B2D31,
+                timestamp=datetime.datetime.utcnow()
             )
+            for name, data in self.database[guild_id].items():
+                ch = interaction.guild.get_channel(data["channel_id"])
+                ch_mention = ch.mention if ch else "`روم محذوف`"
+                embed.add_field(
+                    name=f"⚡ اسم القاعدة: `{name}`",
+                    value=(
+                        f"> ⚙️ النظام: `{data['system_type']}`\n"
+                        f"> 📂 الروم: {ch_mention}\n"
+                        f"> 🔑 الكلمة: `{data['custom_keyword'] if data['custom_keyword'] else 'عام'}`"
+                    ),
+                    inline=False
+                )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # التحقق من وجود اسم القاعدة للعمليات الأخرى
+        if not action_name:
+            await interaction.response.send_message("❌ **يجب تحديد اسم القاعدة (`action_name`) لإتمام هذا الإجراء!**", ephemeral=True)
+            return
 
-    # 🧠 محرك الاستماع والتشغيل الذكي الشامل لكل الأنظمة الخارقة
+        rule_key = action_name.lower().strip()
+
+        # 2. حذف قاعدة (Remove)
+        if action == "remove":
+            if rule_key in self.database[guild_id]:
+                del self.database[guild_id][rule_key]
+                save_autotrap_db(self.database)
+                await interaction.response.send_message(f"🗑️ **تم بنجاح حذف قاعدة التفاعل التلقائي:** `{rule_key}`", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"❌ **لم يتم العثور على قاعدة بهذا الاسم:** `{rule_key}`", ephemeral=True)
+            return
+
+        # 3. إنشاء قاعدة جديدة (Create)
+        if action == "create":
+            if not channel:
+                await interaction.response.send_message("❌ **يجب تحديد الروم المستهدفة (`channel`) عند إنشاء قاعدة جديدة!**", ephemeral=True)
+                return
+            if rule_key in self.database[guild_id]:
+                await interaction.response.send_message(f"❌ **توجد قاعدة مسجلة بهذا الاسم مسبقاً (`{rule_key}`). استخدم إجراء التعديل (`edit`) بدلاً منها!**", ephemeral=True)
+                return
+
+            reactions_list = [r.strip() for r in reactions.split()] if reactions else []
+
+            self.database[guild_id][rule_key] = {
+                "channel_id": channel.id,
+                "system_type": system_type,
+                "custom_keyword": custom_keyword.lower().strip() if custom_keyword else "",
+                "reply_type": reply_type,
+                "message_content": message_content or "",
+                "image_url": image_url or "",
+                "reactions": reactions_list,
+                "target_role_id": target_role.id if target_role else None,
+                "allow_bots": allow_bots,
+                "created_at": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+            }
+            save_autotrap_db(self.database)
+
+            embed = discord.Embed(
+                title="⚡ ╎ تـم إنـشـاء قـاعـدة الـتـفـاعـل الـتـلـقـائـي بنجاح تام",
+                description=(
+                    f"> 📌 **اسم القاعدة:** `{rule_key}`\n"
+                    f"> ⚙️ **نوع النظام:** `{system_type}`\n"
+                    f"> 📂 **الروم المستهدفة:** {channel.mention}"
+                ),
+                color=0x2ECC71,
+                timestamp=datetime.datetime.utcnow()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # 4. تعديل قاعدة موجودة (Edit)
+        if action == "edit":
+            if rule_key not in self.database[guild_id]:
+                await interaction.response.send_message(f"❌ **لا توجد قاعدة مسجلة بهذا الاسم للتعديل عليها:** `{rule_key}`", ephemeral=True)
+                return
+
+            rule = self.database[guild_id][rule_key]
+            if channel:
+                rule["channel_id"] = channel.id
+            if custom_keyword is not None:
+                rule["custom_keyword"] = custom_keyword.lower().strip()
+            if message_content is not None:
+                rule["message_content"] = message_content
+            if image_url is not None:
+                rule["image_url"] = image_url
+            if reactions is not None:
+                rule["reactions"] = [r.strip() for r in reactions.split()]
+            if target_role:
+                rule["target_role_id"] = target_role.id
+
+            save_autotrap_db(self.database)
+            await interaction.response.send_message(f"✅ **تم تحديث قاعدة التفاعل `{rule_key}` وتطبيق التعديلات بنجاح!**", ephemeral=True)
+
+    # 🧠 محرك الاستماع والتشغيل الذكي الشامل لكل الأنظمة بالخلفية
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if not message.guild:
@@ -248,7 +210,7 @@ class ZiuoEnterpriseAutoTrapCog(commands.Cog):
         for name, data in self.database[guild_id].items():
             if message.channel.id != data["channel_id"]:
                 continue
-            if message.author.bot and not data["allow_bots"]:
+            if message.author.bot and not data.get("allow_bots", False):
                 continue
 
             sys_type = data.get("system_type")
@@ -272,13 +234,11 @@ class ZiuoEnterpriseAutoTrapCog(commands.Cog):
                     except:
                         pass
 
-                # النظام 3: رسالة ترحيب أو رد مع أزرار وصور Media & Button Trap
+                # النظام 3: رسالة ترحيب أو رد مع صور Media & Button Trap
                 elif sys_type == "media_trap":
                     reply_type = data.get("reply_type", "text")
                     content_tpl = data.get("message_content", "")
                     img_url = data.get("image_url", "")
-                    b_label = data.get("button_label")
-                    b_url = data.get("button_url")
 
                     formatted = (
                         content_tpl.replace("[user]", message.author.mention)
@@ -286,21 +246,16 @@ class ZiuoEnterpriseAutoTrapCog(commands.Cog):
                                    .replace("[server]", message.guild.name)
                     )
 
-                    view = None
-                    if b_label and b_url:
-                        view = discord.ui.View()
-                        view.add_item(discord.ui.Button(label=b_label, url=b_url, style=discord.ButtonStyle.link))
-
                     if reply_type == "embed":
                         res_embed = discord.Embed(description=formatted, color=0x2B2D31)
                         if img_url:
                             res_embed.set_image(url=img_url)
-                        await message.channel.send(embed=res_embed, view=view)
+                        await message.channel.send(embed=res_embed)
                     elif reply_type == "text":
                         final_txt = formatted
                         if img_url:
                             final_txt += f"\n{img_url}"
-                        await message.channel.send(final_txt, view=view)
+                        await message.channel.send(final_txt)
 
                 # النظام 4: حماية الروابط ومنع السبام Anti-Link / Spam Shield
                 elif sys_type == "anti_spam":
@@ -334,4 +289,3 @@ class ZiuoEnterpriseAutoTrapCog(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(ZiuoEnterpriseAutoTrapCog(bot))
-    
