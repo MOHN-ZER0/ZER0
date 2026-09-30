@@ -73,7 +73,7 @@ class LeaveTextModal(discord.ui.Modal, title="تعديل رسالة المغاد
         await interaction.response.send_message("✅ **تم تحديث رسالة المغادرة بنجاح!**", ephemeral=True)
 
 
-class DMTextModal(discord.ui.Modal, title="تعديل رسالة الخاص (DM)") :
+class DMTextModal(discord.ui.Modal, title="تعديل رسالة الخاص (DM)"):
     text_input = discord.ui.TextInput(
         label="رسالة الخاص الجديدة",
         style=discord.TextStyle.paragraph,
@@ -306,4 +306,44 @@ class MegaWelcomeSystemCog(commands.Cog):
 
         formatted_msg = self.format_text(MEGA_WELCOME_CONFIG["welcome_message"], member, inviter_name, invites_count)
 
-lnb = "\n"
+        try:
+            if MEGA_WELCOME_CONFIG["card_enabled"]:
+                embed = discord.Embed(color=0x2B2D31)
+                embed.description = formatted_msg
+                embed.set_image(url=MEGA_WELCOME_CONFIG["card_image_url"])
+                embed.set_author(name=member.guild.name, icon_url=member.guild.icon.url if member.guild.icon else None)
+                embed.set_footer(text=f"ID: {member.id} ✦ ZIUO Enterprise System")
+                embed.timestamp = datetime.datetime.utcnow()
+                await channel.send(embed=embed)
+            else:
+                await channel.send(formatted_msg)
+        except Exception as e:
+            print(f"[WELCOME SEND ERROR]: {e}")
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        if not MEGA_WELCOME_CONFIG["leave_enabled"]:
+            return
+
+        channel_id = MEGA_WELCOME_CONFIG["leave_channel_id"]
+        if not channel_id:
+            return
+
+        channel = member.guild.get_channel(channel_id)
+        if not channel:
+            return
+
+        formatted_msg = (
+            MEGA_WELCOME_CONFIG["leave_message"]
+            .replace("[userName]", member.name)
+            .replace("[memberCount]", str(member.guild.member_count))
+            .replace("[server]", member.guild.name)
+        )
+
+        try:
+            await channel.send(formatted_msg)
+        except Exception as e:
+            print(f"[LEAVE SEND ERROR]: {e}")
+
+async def setup(bot):
+    await bot.add_cog(MegaWelcomeSystemCog(bot))
