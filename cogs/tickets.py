@@ -444,7 +444,7 @@ class PanelControlView(discord.ui.View):
             
             embed = discord.Embed(
                 title=p_data.get("title"),
-                description=p_data.get("desc") + "\n\n____________________________________________________________________\n✦ **اختر القسم المناسب لطلبك من القائمة أدناه:**",
+                description=p_data.get("desc") + "\n\n________________________________________________________________----\n✦ **اختر القسم المناسب لطلبك من القائمة أدناه:**",
                 color=0x2B2D31,
                 timestamp=datetime.datetime.utcnow()
             )
@@ -534,8 +534,8 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
     )
     
     embed.add_field(name="🔢 ╎ رقم التذكرة", value=f"`{total_ticket_number}`", inline=True)
-    embed.add_field(name="📂 ╎ قسم التذكرة", value=`{section_data['label']}`, inline=True)
-    embed.add_field(name="🛡️ ╎ رتبة الدعم المسؤول", value=f"{staff_mentions}", inline=True)  # رتبة الدعم داخل الـ Embed
+    embed.add_field(name="📂 ╎ قسم التذكرة", value=f"`{section_data['label']}`", inline=True)
+    embed.add_field(name="🛡️ ╎ رتبة الدعم المسؤول", value=f"{staff_mentions}", inline=True)
     
     if is_custom_answer:
         q_title = section_data.get("custom_question", "إجابة العضو المطلوبة")
@@ -910,7 +910,7 @@ async def finalize_panel_setup(interaction: discord.Interaction, panel_name: str
     
     embed = discord.Embed(
         title=panel_data.get("title"),
-        description=panel_data.get("desc") + "\n\n____________________________________________________________________\n✦ **اختر القسم المناسب لطلبك من القائمة أدناه:**",
+        description=panel_data.get("desc") + "\n\n________________________________________________________________----\n✦ **اختر القسم المناسب لطلبك من القائمة أدناه:**",
         color=0x2B2D31,
         timestamp=datetime.datetime.utcnow()
     )
