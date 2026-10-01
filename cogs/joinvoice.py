@@ -20,7 +20,6 @@ class VoiceControlView(discord.ui.View):
         guild = interaction.guild
         if guild.voice_client:
             db.remove(str(guild.id))
-
             channel_name = guild.voice_client.channel.name
             await guild.voice_client.disconnect()
             
@@ -93,7 +92,6 @@ class VoicePresenceCog(commands.Cog):
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         if member.id == self.bot.user.id:
             guild_id_str = str(member.guild.id)
-            
             if before.channel and not after.channel:
                 target_channel_id = db.get(guild_id_str)
                 if target_channel_id:
@@ -140,14 +138,13 @@ class VoicePresenceCog(commands.Cog):
 
             embed = discord.Embed(
                 title="🎧 ╎ نـظـام الـتـواجـد الصـوتـي الـدائـم 24/7 〣 ｢⚡｣",
-                description=f"> تم تثبيت وحفظ البوت داخل الغرفة بنجاح.\n━━━━━━━━━━━━━━━━━━━━━",
+                description="> تم تثبيت وحفظ البوت داخل الغرفة بنجاح.\n━━━━━━━━━━━━━━━━━━━━━",
                 color=0x2b2d31,
                 timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
             embed.add_field(name="🔊 ╎ الـروم الصـوتـي", value=f"> ｢ {target_channel.mention} ｣", inline=False)
             embed.add_field(name="🛡 ╎ بـواسـطـة", value=f"> ｢ {interaction.user.mention} ｣", inline=False)
             embed.add_field(name="📌 ╎ الحـالـة", value=f"> ｢ {action_status} ｣", inline=False)
-            embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
             embed.set_footer(text="Z I UO - MC Server ✦ Voice Presence Engine 24/7")
             
             view = VoiceControlView(self, interaction.guild.id)
@@ -183,10 +180,6 @@ class VoicePresenceCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
             await interaction.response.send_message("❌ البوت غير متصل بأي روم صوتي في هذا السيرفر أساساً!", ephemeral=True)
-
-async def setup(bot):
-    await bot.add_cog(VoicePresenceCog(bot))
-hemeral=True)
 
 async def setup(bot):
     await bot.add_cog(VoicePresenceCog(bot))
