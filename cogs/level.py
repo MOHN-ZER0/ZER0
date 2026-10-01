@@ -1,52 +1,141 @@
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 import datetime
 import random
 import time
+import sqlite3
+import os
 
 # ==============================================================================
-# 🌟 قاعدة البيانات الداخلية للنظام (Global Server Database)
+# 🗄️ إعدادات وتجهيز قاعدة البيانات الدائمة (SQLite3 Database Core)
 # ==============================================================================
-SERVER_DATABASE = {
-    "users": {},          
-    "settings": {},       
-    "custom_cards": {},   
-    "cooldowns": {}       
-}
+DB_FILE = "level_system.db"
 
-def fetch_guild_config(guild_id: int):
-    if guild_id not in SERVER_DATABASE["settings"]:
-        SERVER_DATABASE["settings"][guild_id] = {
-            "status": True,
-            "multiplier": 1,
-            "announcement_channel": None,
-            "level_message": "✨ كفو يا {user}! لقد أثبتَّ حضورك وصعدت بنجاح إلى المستوى **`{level}`**!",
-            "level_image": None,
-            "role_rewards": {},
-            "reset_type": "يومي",
-            "allowed_role_id": None,
-            "blacklisted_channels": [] # قائمة الرومات المستثناة من الـ XP
-        }
-    return SERVER_DATABASE["settings"][guild_id]
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    # جدول إعدادات السيرفر
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS server_settings (
+            guild_id INTEGER PRIMARY KEY,
+            status INTEGER DEFAULT 1,
+            multiplier INTEGER DEFAULT 1,
+            announcement_channel INTEGER,
+            level_message TEXT DEFAULT '✨ كفو يا {user}! لقد أثبتَّ حضورك وصعدت بنجاح إلى المستوى **`{level}`**!',
+            level_image TEXT,
+            reset_type TEXT DEFAULT 'يومي',
+            allowed_role_id INTEGER
+        )
+    """)
+    
+    # جدول رتب المكافآت للمستويات
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS role_rewards (
+            guild_id INTEGER,
+            level INTEGER,
+            role_id INTEGER,
+            PRIMARY KEY (guild_id, level)
+        )
+    """)
+    
+    # جدول رومات الحظر (Blacklisted Channels)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS blacklisted_channels (
+            guild_id INTEGER,
+            channel_id INTEGER,
+            PRIMARY KEY (guild_id, channel_id)
+        )
+    """)
+    
+    # جدول مستويات الأعضاء والتفاعل
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_stats (
+            guild_id INTEGER,
+            user_id INTEGER,
+            xp INTEGER DEFAULT 0,
+            level INTEGER DEFAULT 0,
+            messages INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    """)
+    
+    conn.commit()
+    conn.close()
 
-# دالة توليد إيمبد لوحة التحكم المحدثة لحظياً
+init_db()
+
+# دوال جلب وحفظ البيانات من القاعدة
+def get_db_settings(guild_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT status, multiplier, announcement_channel, level_message, level_image, reset_type, allowed_role_id FROM server_settings WHERE guild_id = ?", (guild_id,))
+    row = cursor.fetchone()
+    
+    if not row:
+        cursor.execute("""
+            INSERT INTO server_settings (guild_id, status, multiplier, level_message, reset_type)
+            VALUES (?, 1, 1, '✨ كفو يا {user}! لقد أثبتَّ حضورك وصعدت بنجاح إلى المستوى **`{level}`**!', 'يومي')
+        """, (guild_id,))
+        conn.commit()
+        cursor.execute("SELECT status, multiplier, announcement_channel, level_message, level_image, reset_type, allowed_role_id FROM server_settings WHERE guild_id = ?", (guild_id,))
+        row = cursor.fetchone()
+    
+    # جلب رتب المكافآت
+    cursor.execute("SELECT level, role_id FROM role_rewards WHERE guild_id = ?", (guild_id,))
+    rewards_rows = cursor.fetchall()
+    role_rewards = {str(lvl): r_id for lvl, r_id in rewards_rows}
+
+    # جلب الرومات المحظورة
+    cursor.execute("SELECT channel_id FROM blacklisted_channels WHERE guild_id = ?", (guild_id,))
+    blacklist_rows = cursor.fetchall()
+    blacklisted_channels = [r[0] for r in blacklist_rows]
+
+    conn.close()
+    
+    return {
+        "status": bool(row[0]),
+        "multiplier": row[1],
+        "announcement_channel": row[2],
+        "level_message": row[3],
+        "level_image": row[4],
+        "reset_type": row[5],
+        "allowed_role_id": row[6],
+        "role_rewards": role_rewards,
+        "blacklisted_channels": blacklisted_channels
+    }
+
+def update_db_setting(guild_id: int, column: str, value):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE server_settings SET {column} = ? WHERE guild_id = ?", (value, guild_id))
+    conn.commit()
+    conn.close()
+
+# دالة توليد إيمبد لوحة التحكم المحدثة
 def generate_panel_embed(guild: discord.Guild):
-    cfg = fetch_guild_config(guild.id)
+    cfg = get_db_settings(guild.id)
     status_str = "مفعّل 🟢" if cfg["status"] else "متوقف 🔴"
     chan_disp = f"<#{cfg['announcement_channel']}>" if cfg['announcement_channel'] else "روم الإعلانات الافتراضي 💬"
     allowed_role_disp = f"<@&{cfg['allowed_role_id']}>" if cfg['allowed_role_id'] else "متاح للجميع 🌐"
-    
     blacklist_disp = ", ".join([f"<#{cid}>" for cid in cfg["blacklisted_channels"]]) if cfg["blacklisted_channels"] else "لا توجد رومات مستثناة 📭"
+    
+    reset_schedule_desc = {
+        "يومي": "كل يوم الساعة 12:00 منتصف الليل 🕛",
+        "اسبوعي": "كل يوم جمعة الساعة 12:00 منتصف الليل 📅",
+        "شهري": "أول يوم من كل شهر الساعة 12:00 منتصف الليل 🗓"
+    }.get(cfg["reset_type"], "يومي (12:00 منتصف الليل)")
 
     embed = discord.Embed(
-        title="⚙️ لـوحـة تـحـكـم نـظام الـمـسـتـويـات (Pro Core)",
+        title="⚙️ لـوحـة تـحـكـم نـظام الـمـسـتـويـات (Secure Pro)",
         description=(
-            "مرحباً بك في لوحة الإدارة المركزية المحدثة لنظام التفاعل.\n"
-            "جميع التعديلات تظهر هنا فوراً:\n\n"
+            "مرحباً بك في لوحة الإدارة المركزية الآمنة لنظام التفاعل.\n"
+            "جميع التعديلات محفوظة بشكل دائم في قاعدة البيانات:\n\n"
             f"• **حالة النظام العامة:** {status_str}\n"
-            f"• **نوع الريسيت المختار:** `{cfg['reset_type']}` 📅\n"
-            f"• **روم إعلانات الترقية:** {chan_disp}\n"
+            f"• **نوع ونظام الريسيت:** `{cfg['reset_type']}` 📅\n"
+            f"• **موعد إرسال التوب التلقائي:** `{reset_schedule_desc}` ⏰\n"
+            f"• **روم إعلانات الترقية والتوب:** {chan_disp}\n"
             f"• **رتبة التفاعل المخصصة:** {allowed_role_disp}\n"
             f"• **مضاعف النقاط النشط:** `{cfg['multiplier']}x` ⚡\n"
             f"• **رتب المكافآت المربوطة:** `{len(cfg['role_rewards'])}` رتبة\n"
@@ -55,43 +144,47 @@ def generate_panel_embed(guild: discord.Guild):
         color=0x2B2D31,
         timestamp=datetime.datetime.utcnow()
     )
-    embed.set_footer(text="Admin Core ✦ Pro Live Update")
+    embed.set_footer(text="Secure Database Core ✦ Live Update")
     return embed
 
 # ==============================================================================
-# 🛠️ الواجهات المنبثقة (Modals) للتعديل الفوري
+# 🛡️️ الواجهات المنبثقة (Modals) مع التحقق الأمني المتقدم للصلاحيات
 # ==============================================================================
-class ResetConfigModal(discord.ui.Modal, title="⚙️ إعدادات الريسيت وروم الإعلانات"):
+class ResetConfigModal(discord.ui.Modal, title="⚙️ إعدادات الريسيت وجدولة التوب"):
     reset_type_box = discord.ui.TextInput(
-        label="نوع ونظام الريسيت (يومي / اسبوعي / شهري)",
+        label="نوع نظام الريسيت (يومي / اسبوعي / شهري)",
         default="يومي",
         max_length=50,
         required=True
     )
     channel_id_box = discord.ui.TextInput(
-        label="أيدي روم الإعلانات والتوب (Channel ID)",
-        placeholder="أيدي الروم (اختياري)",
+        label="أيدي روم إعلانات التوب والترقية (Channel ID)",
+        placeholder="أيدي الروم هنا (اختياري)",
         max_length=30,
         required=False
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        cfg = fetch_guild_config(interaction.guild.id)
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
+            return
+
         raw_type = self.reset_type_box.value.strip()
-        
         if "اسبوع" in raw_type.lower() or "أسبوع" in raw_type.lower():
-            cfg["reset_type"] = "اسبوعي"
+            r_type = "اسبوعي"
         elif "شهر" in raw_type.lower():
-            cfg["reset_type"] = "شهري"
+            r_type = "شهري"
         else:
-            cfg["reset_type"] = "يومي"
+            r_type = "يومي"
+
+        update_db_setting(interaction.guild.id, "reset_type", r_type)
 
         chan_text = self.channel_id_box.value.strip()
         if chan_text.isdigit():
-            cfg["announcement_channel"] = int(chan_text)
+            update_db_setting(interaction.guild.id, "announcement_channel", int(chan_text))
 
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
-        await interaction.followup.send("🔄 **تم تحديث إعدادات الريسيت بنجاح!**", ephemeral=True)
+        await interaction.followup.send("🔄 **تم تحديث أوقات الريسيت وجدولة التوب وحفظها في قاعدة البيانات!**", ephemeral=True)
 
 class AllowedRoleModal(discord.ui.Modal, title="🛡️ تحديد رتبة التفاعل المخصصة"):
     role_id_box = discord.ui.TextInput(
@@ -102,18 +195,20 @@ class AllowedRoleModal(discord.ui.Modal, title="🛡️ تحديد رتبة ال
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        cfg = fetch_guild_config(interaction.guild.id)
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
+            return
+
         val = self.role_id_box.value.strip()
-        
         if val.lower() == "none":
-            cfg["allowed_role_id"] = None
+            update_db_setting(interaction.guild.id, "allowed_role_id", None)
         elif val.isdigit():
             r_obj = interaction.guild.get_role(int(val))
             if r_obj:
-                cfg["allowed_role_id"] = r_obj.id
+                update_db_setting(interaction.guild.id, "allowed_role_id", r_obj.id)
 
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
-        await interaction.followup.send("🔒 **تم تحديث رتبة التفاعل بنجاح!**", ephemeral=True)
+        await interaction.followup.send("🔒 **تم تحديث رتبة التفاعل وحفظها بنجاح!**", ephemeral=True)
 
 class BlacklistChannelModal(discord.ui.Modal, title="🚫 إدارة رومات منع احتساب الـ XP"):
     action_box = discord.ui.TextInput(
@@ -124,13 +219,16 @@ class BlacklistChannelModal(discord.ui.Modal, title="🚫 إدارة رومات 
     )
     channel_id_box = discord.ui.TextInput(
         label="أيدي الروم المراد تعديلها (Channel ID)",
-        placeholder="قم بلصق أيدي الروم هنا",
+        placeholder="أيدي الروم",
         max_length=30,
         required=True
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        cfg = fetch_guild_config(interaction.guild.id)
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
+            return
+
         action = self.action_box.value.strip().lower()
         chan_text = self.channel_id_box.value.strip()
 
@@ -139,18 +237,42 @@ class BlacklistChannelModal(discord.ui.Modal, title="🚫 إدارة رومات 
             return
 
         cid = int(chan_text)
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+
         if action == "add":
-            if cid not in cfg["blacklisted_channels"]:
-                cfg["blacklisted_channels"].append(cid)
+            cursor.execute("INSERT OR IGNORE INTO blacklisted_channels (guild_id, channel_id) VALUES (?, ?)", (interaction.guild.id, cid))
+            conn.commit()
+            conn.close()
             await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
-            await interaction.followup.send(f"🚫 **تمت إضافة الروم <#{cid}> لقائمة الحظر بنجاح!**", ephemeral=True)
+            await interaction.followup.send(f"🚫 **تمت إضافة الروم <#{cid}> لقائمة الحظر الدائمة!**", ephemeral=True)
         elif action == "remove":
-            if cid in cfg["blacklisted_channels"]:
-                cfg["blacklisted_channels"].remove(cid)
+            cursor.execute("DELETE FROM blacklisted_channels WHERE guild_id = ? AND channel_id = ?", (interaction.guild.id, cid))
+            conn.commit()
+            conn.close()
             await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
-            await interaction.followup.send(f"✅ **تمت إزالة الروم <#{cid}> من قائمة الحظر بنجاح!**", ephemeral=True)
+            await interaction.followup.send(f"✅ **تمت إزالة الروم <#{cid}> من قائمة الحظر!**", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ العملية غير صحيحة، اكتب add أو remove فقط!", ephemeral=True)
+            conn.close()
+            await interaction.response.send_message("❌ اكتب add للإضافة أو remove للحذف فقط!", ephemeral=True)
+
+class CustomMessageModal(discord.ui.Modal, title="💬 تعديل رسالة الصعود المخصصة"):
+    msg_box = discord.ui.TextInput(
+        label="اكتب الرسالة (استخدم {user} و {level})",
+        default="✨ كفو يا {user}! لقد أثبتَّ حضورك وصعدت بنجاح إلى المستوى **`{level}`**!",
+        style=discord.TextStyle.paragraph,
+        max_length=800,
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
+            return
+
+        update_db_setting(interaction.guild.id, "level_message", self.msg_box.value)
+        await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
+        await interaction.followup.send("✨ **تم تحديث رسالة الترقية وحفظها بنجاح!**", ephemeral=True)
 
 class AddRewardRoleModal(discord.ui.Modal, title="🎁 ربط رتبة مكافأة بمستوى معين"):
     lvl_box = discord.ui.TextInput(
@@ -167,6 +289,10 @@ class AddRewardRoleModal(discord.ui.Modal, title="🎁 ربط رتبة مكاف�
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
+            return
+
         try:
             level_num = int(self.lvl_box.value.strip())
             role_id = int(self.role_box.value.strip())
@@ -179,11 +305,14 @@ class AddRewardRoleModal(discord.ui.Modal, title="🎁 ربط رتبة مكاف�
             await interaction.response.send_message("❌ لم يتم العثور على رتبة بهذا الأيدي!", ephemeral=True)
             return
 
-        cfg = fetch_guild_config(interaction.guild.id)
-        cfg["role_rewards"][str(level_num)] = role_obj.id
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO role_rewards (guild_id, level, role_id) VALUES (?, ?, ?)", (interaction.guild.id, level_num, role_id))
+        conn.commit()
+        conn.close()
 
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
-        await interaction.followup.send(f"🎁 تم ربط المستوى **`{level_num}`** بالرتبة بنجاح!", ephemeral=True)
+        await interaction.followup.send(f"🎁 **تم ربط المستوى `{level_num}` بالرتبة وحفظها بقاعدة البيانات بنجاح!**", ephemeral=True)
 
 class SetMultiplierModal(discord.ui.Modal, title="⚡ تحديد مضاعف النقاط (Multiplier)"):
     mult_box = discord.ui.TextInput(
@@ -194,6 +323,10 @@ class SetMultiplierModal(discord.ui.Modal, title="⚡ تحديد مضاعف ال
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
+            return
+
         try:
             val = int(self.mult_box.value.strip())
             if val < 1 or val > 10:
@@ -202,65 +335,97 @@ class SetMultiplierModal(discord.ui.Modal, title="⚡ تحديد مضاعف ال
             await interaction.response.send_message("❌ يرجى إدخال رقم بين 1 و 10!", ephemeral=True)
             return
 
-        cfg = fetch_guild_config(interaction.guild.id)
-        cfg["multiplier"] = val
-
+        update_db_setting(interaction.guild.id, "multiplier", val)
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
-        await interaction.followup.send(f"⚡ تم ضبط مضاعف النقاط ليصبح **`{val}x`** بنجاح!", ephemeral=True)
+        await interaction.followup.send(f"⚡ **تم ضبط مضاعف النقاط ليصبح `{val}x` وحفظه بنجاح!**", ephemeral=True)
 
 # ==============================================================================
-# 🎛 لوحة التحكم الإدارية والأزرار
+# 🎛 لوحة التحكم الإدارية المتكاملة مع الأزرار كاملة
 # ==============================================================================
 class AdminPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="تشغيل/إيقاف", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="p_tgl_v11")
+    @discord.ui.button(label="تشغيل/إيقاف", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="p_tgl_v13")
     async def toggle_sys(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
-        cfg = fetch_guild_config(interaction.guild.id)
-        cfg["status"] = not cfg["status"]
+        cfg = get_db_settings(interaction.guild.id)
+        new_status = 0 if cfg["status"] else 1
+        update_db_setting(interaction.guild.id, "status", new_status)
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=self)
 
-    @discord.ui.button(label="الريسيت والتوب", style=discord.ButtonStyle.primary, emoji="📅", row=0, custom_id="p_reset_v11")
+    @discord.ui.button(label="الريسيت وجدولة التوب", style=discord.ButtonStyle.primary, emoji="📅", row=0, custom_id="p_reset_v13")
     async def reset_config_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(ResetConfigModal())
 
-    @discord.ui.button(label="استثناء الرومات (XP)", style=discord.ButtonStyle.secondary, emoji="🚫", row=0, custom_id="p_blacklist_v11")
+    @discord.ui.button(label="استثناء الرومات (XP)", style=discord.ButtonStyle.secondary, emoji="🚫", row=0, custom_id="p_blacklist_v13")
     async def blacklist_channels_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(BlacklistChannelModal())
 
-    @discord.ui.button(label="إضافة رتبة مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=1, custom_id="p_reward_v11")
+    @discord.ui.button(label="إضافة رتبة مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=1, custom_id="p_reward_v13")
     async def add_reward(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(AddRewardRoleModal())
 
-    @discord.ui.button(label="رتبة التفاعل", style=discord.ButtonStyle.secondary, emoji="🛡️", row=1, custom_id="p_role_v11")
+    @discord.ui.button(label="تعديل رسالة الصعود", style=discord.ButtonStyle.secondary, emoji="💬", row=1, custom_id="p_msg_v13")
+    async def edit_msg(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
+            return
+        await interaction.response.send_modal(CustomMessageModal())
+
+    @discord.ui.button(label="رتبة التفاعل", style=discord.ButtonStyle.secondary, emoji="🛡️", row=2, custom_id="p_role_v13")
     async def allowed_role_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(AllowedRoleModal())
 
-    @discord.ui.button(label="ضبط المضاعف", style=discord.ButtonStyle.danger, emoji="⚡", row=1, custom_id="p_mult_v11")
+    @discord.ui.button(label="ضبط المضاعف", style=discord.ButtonStyle.danger, emoji="⚡", row=2, custom_id="p_mult_v13")
     async def set_mult(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(SetMultiplierModal())
 
+    @discord.ui.button(label="إحصائيات السيرفر", style=discord.ButtonStyle.secondary, emoji="📊", row=2, custom_id="p_stats_v13")
+    async def server_stats_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        gid = interaction.guild.id
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*), SUM(messages) FROM user_stats WHERE guild_id = ?", (gid,))
+        row = cursor.fetchone()
+        conn.close()
+
+        total_users = row[0] or 0
+        total_msgs = row[1] or 0
+        cfg = get_db_settings(gid)
+        
+        embed = discord.Embed(
+            title="📊 إحصائيات ونشاط نظام الليفلات الدائم",
+            description=(
+                f"• **عدد الأعضاء النشطين:** `{total_users}` عضو\n"
+                f"• **إجمالي الرسائل المحتسبة:** `{total_msgs}` رسالة\n"
+                f"• **مضاعف النقاط الحالي:** `{cfg['multiplier']}x`\n"
+                f"• **نظام الريسيت النشط:** `{cfg['reset_type']}`"
+            ),
+            color=0x2B2D31,
+            timestamp=datetime.datetime.utcnow()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 # ==============================================================================
-# 🏆 لوحة شرف التوب مع أزرار التنقل
+# 🏆 لوحة شرف التوب مع أزرار التنقل التفاعلية
 # ==============================================================================
 class TopLeaderboardView(discord.ui.View):
     def __init__(self, interaction_guild, users_list, page=0):
@@ -282,11 +447,11 @@ class TopLeaderboardView(discord.ui.View):
         chunk = self.users_list[start:end]
 
         lines = []
-        for idx, (uid, udata) in enumerate(chunk, start=start + 1):
+        for idx, (uid, lvl, xp, msgs) in enumerate(chunk, start=start + 1):
             m_obj = self.guild.get_member(uid)
             name_str = m_obj.mention if m_obj else f"عضو مغادر (`{uid}`)"
             badge = "👑" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else f"`#{idx}`"
-            lines.append(f"{badge} ╎ {name_str}\n ┗ المستوى: **`{udata['level']}`** | XP: **`{udata['xp']}`** | الرسائل: **`{udata['messages']}`**\n")
+            lines.append(f"{badge} ╎ {name_str}\n ┗ المستوى: **`{lvl}`** | XP: **`{xp}`** | الرسائل: **`{msgs}`**\n")
 
         embed = discord.Embed(
             title="📋 لوحة شرف تفاعل السيرفر (Top List)",
@@ -297,7 +462,7 @@ class TopLeaderboardView(discord.ui.View):
         embed.set_footer(text=f"Page {self.page + 1} of {self.max_pages}")
         return embed
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="◀", custom_id="t_prev_v11")
+    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="◀", custom_id="t_prev_v13")
     async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.page > 0:
             self.page -= 1
@@ -306,11 +471,11 @@ class TopLeaderboardView(discord.ui.View):
         else:
             await interaction.response.defer()
 
-    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_myrank_v11")
+    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_myrank_v13")
     async def my_rank_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = interaction.user.id
         found_idx = None
-        for i, (u_id, _) in enumerate(self.users_list):
+        for i, (u_id, _, _, _) in enumerate(self.users_list):
             if u_id == uid:
                 found_idx = i + 1
                 break
@@ -323,7 +488,7 @@ class TopLeaderboardView(discord.ui.View):
         else:
             await interaction.response.send_message("❌ ليس لديك تفاعل مسجل بعد!", ephemeral=True)
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="▶", custom_id="t_next_v11")
+    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="▶", custom_id="t_next_v13")
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.page < self.max_pages - 1:
             self.page += 1
@@ -333,11 +498,47 @@ class TopLeaderboardView(discord.ui.View):
             await interaction.response.defer()
 
 # ==============================================================================
-# 🚀 محرك التشغيل البرمجي والمنطق الأساسي (Pro Level System)
+# 🚀 محرك التشغيل البرمجي والمنطق الأساسي (Database & Advanced Engine)
 # ==============================================================================
 class AdvancedLevelSystem(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.auto_top_announcement.start()
+
+    def cog_unload(self):
+        self.auto_top_announcement.cancel()
+
+    @tasks.loop(hours=24)
+    async def auto_top_announcement(self):
+        for guild in self.bot.guilds:
+            gid = guild.id
+            cfg = get_db_settings(gid)
+            if not cfg["status"]:
+                continue
+            
+            chan_id = cfg.get("announcement_channel")
+            target_channel = guild.get_channel(chan_id) if chan_id else guild.system_channel
+            if not target_channel:
+                continue
+
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id, level, xp, messages FROM user_stats WHERE guild_id = ? ORDER BY level DESC, xp DESC", (gid,))
+            rows = cursor.fetchall()
+            conn.close()
+
+            if not rows:
+                continue
+
+            view = TopLeaderboardView(guild, rows, page=0)
+            try:
+                await target_channel.send("📢 **تقرير توب السيرفر التلقائي الدائم:**", embed=view.create_embed(), view=view)
+            except:
+                pass
+
+    @auto_top_announcement.before_loop
+    async def before_auto_top(self):
+        await self.bot.wait_until_ready()
 
     def check_allowed_member(self, member, cfg):
         allowed_role_id = cfg.get("allowed_role_id")
@@ -345,39 +546,43 @@ class AdvancedLevelSystem(commands.Cog):
             return True
         return any(role.id == allowed_role_id for role in member.roles)
 
-    async def check_level_up(self, member, gid, udata):
-        cfg = fetch_guild_config(gid)
-        # الفكرة 2: معادلة صعود تصاعدية واقعية
-        req_xp = (udata["level"] + 1) * 300 + (udata["level"] ** 1.2 * 120)
+    async def check_level_up(self, member, gid, udata, cfg):
+        lvl = udata["level"]
+        xp = udata["xp"]
+        req_xp = (lvl + 1) * 300 + (lvl ** 1.2 * 120)
 
-        if udata["xp"] >= req_xp:
-            udata["level"] += 1
-            udata["xp"] = 0
+        if xp >= req_xp:
+            new_lvl = lvl + 1
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE user_stats SET level = ?, xp = 0 WHERE guild_id = ? AND user_id = ?", (new_lvl, gid, member.id))
+            conn.commit()
+            conn.close()
 
             role_rewards = cfg.get("role_rewards", {})
-            assigned_role_id = role_rewards.get(str(udata["level"]))
+            assigned_role_id = role_rewards.get(str(new_lvl))
             if assigned_role_id:
                 r_target = member.guild.get_role(int(assigned_role_id))
                 if r_target:
                     try:
-                        await member.add_roles(r_target, reason=f"Level Engine: Reached level {udata['level']}")
+                        await member.add_roles(r_target, reason=f"Database Level Engine: Reached level {new_lvl}")
                     except:
                         pass
 
             try:
                 template = cfg.get("level_message", "✨ كفو يا {user}! صرت لفل {level}!")
-                final_text = template.replace("{user}", member.mention).replace("{level}", f"`{udata['level']}`")
+                final_text = template.replace("{user}", member.mention).replace("{level}", f"`{new_lvl}`")
 
                 embed = discord.Embed(
                     title="🎉 تـرقـيـة مـسـتـوى جـديـد!",
-                    description=f"{final_text}\n\n• **المستوى الحالي:** `{udata['level']}` 🏆\n• **إجمالي الرسائل:** `{udata['messages']}` 📝",
+                    description=f"{final_text}\n\n• **المستوى الحالي:** `{new_lvl}` 🏆\n• **إجمالي الرسائل:** `{udata['messages']}` 📝",
                     color=0x00FF88,
                     timestamp=datetime.datetime.utcnow()
                 )
                 if cfg.get("level_image"):
                     embed.set_image(url=cfg["level_image"])
 
-                embed.set_footer(text="Leveling Protocol ✦ Pro Engine")
+                embed.set_footer(text="Database Protocol ✦ Ultimate Engine")
                 
                 chan_id = cfg.get("announcement_channel")
                 target_channel = member.guild.get_channel(chan_id) if chan_id else member.guild.system_channel
@@ -393,9 +598,8 @@ class AdvancedLevelSystem(commands.Cog):
 
         gid = message.guild.id
         uid = message.author.id
-        cfg = fetch_guild_config(gid)
+        cfg = get_db_settings(gid)
 
-        # الفكرة 1: فحص إذا كان الروم الحالي مستثنى من الـ XP
         if message.channel.id in cfg.get("blacklisted_channels", []):
             return
 
@@ -403,31 +607,41 @@ class AdvancedLevelSystem(commands.Cog):
             return
 
         now_ts = time.time()
-        cd_dict = SERVER_DATABASE["cooldowns"]
-        if gid not in cd_dict:
-            cd_dict[gid] = {}
+        # Cooldown بسيط لمنع السبام
+        if not hasattr(self, "cooldowns"):
+            self.cooldowns = {}
+        if gid not in self.cooldowns:
+            self.cooldowns[gid] = {}
         
-        if now_ts - cd_dict[gid].get(uid, 0) < 5:
+        if now_ts - self.cooldowns[gid].get(uid, 0) < 5:
             return
-        cd_dict[gid][uid] = now_ts
+        self.cooldowns[gid][uid] = now_ts
 
         if random.random() < 0.15:
             return
 
-        if gid not in SERVER_DATABASE["users"]:
-            SERVER_DATABASE["users"][gid] = {}
-        if uid not in SERVER_DATABASE["users"][gid]:
-            SERVER_DATABASE["users"][gid][uid] = {
-                "xp": 0, "level": 0, "messages": 0
-            }
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT xp, level, messages FROM user_stats WHERE guild_id = ? AND user_id = ?", (gid, uid))
+        row = cursor.fetchone()
 
-        udata = SERVER_DATABASE["users"][gid][uid]
-        udata["xp"] += random.randint(5, 15) * cfg["multiplier"]
-        udata["messages"] += 1
+        if not row:
+            cursor.execute("INSERT INTO user_stats (guild_id, user_id, xp, level, messages) VALUES (?, ?, ?, 0, 1)", (gid, uid, random.randint(5, 15) * cfg["multiplier"]))
+            conn.commit()
+            cursor.execute("SELECT xp, level, messages FROM user_stats WHERE guild_id = ? AND user_id = ?", (gid, uid))
+            row = cursor.fetchone()
+        else:
+            new_xp = row[0] + (random.randint(5, 15) * cfg["multiplier"])
+            new_msgs = row[2] + 1
+            cursor.execute("UPDATE user_stats SET xp = ?, messages = ? WHERE guild_id = ? AND user_id = ?", (new_xp, new_msgs, gid, uid))
+            conn.commit()
 
-        await self.check_level_up(message.author, gid, udata)
+        udata = {"xp": row[0], "level": row[1], "messages": row[2] + 1}
+        conn.close()
 
-    @app_commands.command(name="levels_panel", description="[الإدارة] لوحة التحكم الكاملة والمتقدمة لنظام الليفلات")
+        await self.check_level_up(message.author, gid, udata, cfg)
+
+    @app_commands.command(name="levels_panel", description="[الإدارة] لوحة التحكم الكاملة والمتقدمة لنظام الليفلات الدائم")
     @app_commands.checks.has_permissions(administrator=True)
     async def levels_panel(self, interaction: discord.Interaction):
         await interaction.response.send_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView(), ephemeral=False)
@@ -436,14 +650,20 @@ class AdvancedLevelSystem(commands.Cog):
     async def level(self, interaction: discord.Interaction, member: discord.Member = None):
         target = member or interaction.user
         gid = interaction.guild.id
-        udata = SERVER_DATABASE["users"].get(gid, {}).get(target.id, {"xp": 0, "level": 0, "messages": 0})
         
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT xp, level, messages FROM user_stats WHERE guild_id = ? AND user_id = ?", (gid, target.id))
+        row = cursor.fetchone()
+        conn.close()
+
+        udata = {"xp": row[0], "level": row[1], "messages": row[2]} if row else {"xp": 0, "level": 0, "messages": 0}
         req_xp = (udata["level"] + 1) * 300 + (udata["level"] ** 1.2 * 120)
 
         embed = discord.Embed(
             title=f"📊 بطاقة إحصائيات المستوى - {target.display_name}",
             description=(
-                f"سجل التفاعل والنشاط الكامل للشات:\n\n"
+                f"سجل التفاعل والنشاط المحفوظ بقاعدة البيانات:\n\n"
                 f"• **المستوى الحالي:** `{udata['level']}` 🏆\n"
                 f"• **نقاط الخبرة (XP):** `{udata['xp']}` / `{int(req_xp)}` 🌟\n"
                 f"• **الرسائل المرسلة:** `{udata['messages']}` رسالة 📝"
@@ -452,68 +672,55 @@ class AdvancedLevelSystem(commands.Cog):
             timestamp=datetime.datetime.utcnow()
         )
         embed.set_thumbnail(url=target.display_avatar.url)
-        embed.set_footer(text="Rank System ✦ بطاقة العضو النشط")
+        embed.set_footer(text="Secure Rank System ✦ بطاقة العضو")
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    @app_commands.command(name="top", description="عرض لوحة شرف المتصدرين لأعضاء السيرفر مع أزرار التنقل")
+    @app_commands.command(name="top", description="عرض لوحة شرف المتصدرين لأعضاء السيرفر من قاعدة البيانات الدائمة")
     async def top(self, interaction: discord.Interaction):
         gid = interaction.guild.id
-        users_data = SERVER_DATABASE["users"].get(gid, {})
-        if not users_data:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, level, xp, messages FROM user_stats WHERE guild_id = ? ORDER BY level DESC, xp DESC", (gid,))
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
             await interaction.response.send_message("❌ لا توجد أي بيانات تفاعل مسجلة في النظام حتى الآن!", ephemeral=True)
             return
 
-        sorted_members = sorted(users_data.items(), key=lambda x: (x[1]["level"], x[1]["xp"]), reverse=True)
-        view = TopLeaderboardView(interaction.guild, sorted_members, page=0)
+        view = TopLeaderboardView(interaction.guild, rows, page=0)
         await interaction.response.send_message(embed=view.create_embed(), view=view, ephemeral=False)
 
     @app_commands.command(name="setlevel", description="[الإدارة] تعيين مستوى معين لعضو وفحص رتب المكافآت التلقائية")
     @app_commands.checks.has_permissions(administrator=True)
     async def setlevel(self, interaction: discord.Interaction, member: discord.Member, level: int):
         gid = interaction.guild.id
-        cfg = fetch_guild_config(gid)
+        cfg = get_db_settings(gid)
+        new_lvl = max(0, level)
 
-        if gid not in SERVER_DATABASE["users"]:
-            SERVER_DATABASE["users"][gid] = {}
-        if member.id not in SERVER_DATABASE["users"][gid]:
-            SERVER_DATABASE["users"][gid][member.id] = {
-                "xp": 0, "level": 0, "messages": 0
-            }
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO user_stats (guild_id, user_id, xp, level, messages) VALUES (?, ?, 0, ?, COALESCE((SELECT messages FROM user_stats WHERE guild_id = ? AND user_id = ?), 0))", (gid, member.id, new_lvl, gid, member.id))
+        conn.commit()
+        conn.close()
 
-        udata = SERVER_DATABASE["users"][gid][member.id]
-        old_level = udata["level"]
-        udata["level"] = max(0, level)
-        udata["xp"] = 0
-
-        # الفكرة 3: سحب رتب المكافآت القديمة أو إضافتها بذكاء
         role_rewards = cfg.get("role_rewards", {})
-        
-        # منح الرتبة الجديدة إن وجدت
-        assigned_role_id = role_rewards.get(str(udata["level"]))
+        assigned_role_id = role_rewards.get(str(new_lvl))
         role_mention_str = "لا توجد رتبة مكافأة لهذا المستوى"
+        
         if assigned_role_id:
             r_target = interaction.guild.get_role(int(assigned_role_id))
             if r_target:
                 try:
-                    await member.add_roles(r_target, reason=f"Admin SetLevel: Set to level {udata['level']}")
+                    await member.add_roles(r_target, reason=f"Admin Database SetLevel: Set to level {new_lvl}")
                     role_mention_str = r_target.mention
                 except:
                     role_mention_str = "فشل منح الرتبة (تأكد من الصلاحيات)"
 
-        # سحب الرتب القديمة لو العضو ليفله نزل وبقى أقل
-        for lvl_str, r_id in role_rewards.items():
-            if int(lvl_str) > udata["level"]:
-                old_r = interaction.guild.get_role(int(r_id))
-                if old_r and old_r in member.roles:
-                    try:
-                        await member.remove_roles(old_r, reason="Level Revoke: Level decreased by admin")
-                    except:
-                        pass
-
         await interaction.response.send_message(
-            f"🎯 **تم تحديث مستوى العضو بنجاح تام!**\n"
+            f"🎯 **تم تحديث مستوى العضو وحفظه في قاعدة البيانات بنجاح!**\n"
             f"• العضو: {member.mention}\n"
-            f"• المستوى الجديد: **`{udata['level']}`** 🏆\n"
+            f"• المستوى الجديد: **`{new_lvl}`** 🏆\n"
             f"• رتبة المكافأة المرتبطة: {role_mention_str}",
             ephemeral=True
         )
