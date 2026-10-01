@@ -4,9 +4,7 @@ from discord.ext import commands
 import datetime
 import json
 import os
-from typing import Literal
 
-# قاعدة بيانات تخزين إعدادات وأقسام ولوحات التذاكر
 TICKETS_DB_FILE = "ziuo_ultimate_tickets_database.json"
 
 def load_tickets_db():
@@ -46,7 +44,6 @@ class TicketInsideView(discord.ui.View):
         ticket_info = active_tickets[channel_id_str]
         support_role_ids = ticket_info.get("support_role_ids", [])
         
-        # التحقق إذا كان المستخدم لديه صلاحية الدعم أو أدمن
         is_staff = interaction.user.guild_permissions.administrator
         if not is_staff and support_role_ids:
             if any(role.id in support_role_ids for role in interaction.user.roles):
@@ -59,11 +56,7 @@ class TicketInsideView(discord.ui.View):
         ticket_info["claimed_by"] = interaction.user.id
         save_tickets_db(db)
 
-        # تعديل صلاحيات الرومات: جعل باقي الإداريين في وضع القراءة فقط
         channel = interaction.channel
-        guild = interaction.guild
-        
-        # منح المشرف المستلم صلاحية كاملة
         await channel.set_permissions(interaction.user, view_channel=True, send_messages=True, read_message_history=True)
         
         embed = discord.Embed(
@@ -93,12 +86,10 @@ class TicketInsideView(discord.ui.View):
         support_role_ids = ticket_info.get("support_role_ids", [])
         
         if interaction.user.id == creator_id:
-            # العضو هو من يضغط، نقوم بمنشن رتب الدعم
             mentions = " ".join([f"<@&{r_id}>" for r_id in support_role_ids]) if support_role_ids else "فريق الإدارة"
             await interaction.channel.send(f"🔔 **تنبيه عاجل من صاحب التذكرة {interaction.user.mention}:** يرجى من {mentions} تفقد التذكرة والرد في أسرع وقت!")
             await interaction.response.send_message("✅ تم إرسال التنبيه لفريق الدعم بنجاح.", ephemeral=True)
         else:
-            # المشرف هو من يضغط، نقوم بمنشن العضو صاحب التذكرة
             creator_obj = interaction.guild.get_member(creator_id)
             creator_mention = creator_obj.mention if creator_obj else f"<@{creator_id}>"
             await interaction.channel.send(f"🔔 **تنبيه رسمي من الإدارة إلى {creator_mention}:** يرجى التفاعل والرد على التذكرة لاستكمال المساعدة.")
@@ -222,12 +213,12 @@ async def create_user_ticket(interaction: discord.Interaction, panel_name: str, 
         await interaction.response.send_message("❌ عذراً، هذا القسم غير موجود.", ephemeral=True)
         return
 
-    category_id = guild_data.get("category_id")
-    category = guild.get_channel(category_id) if category_id else None
+    # استخدام أيدي الفئة الذي حدده المستخدم في الإعداد
+    category_id_str = panel_data.get("category_id")
+    category = guild.get_channel(int(category_id_str)) if category_id_str and category_id_str.isdigit() else None
     if not category:
         category = await guild.create_category("TICKETS SYSTEM - SECURE")
 
-    # منع فتح أكثر من تذكرة نشطة لنفس المستخدم
     for channel in category.text_channels:
         if f"-{interaction.user.id}" in channel.name:
             await interaction.response.send_message(f"❌ لديك تذكرة مفتوحة بالفعل هنا: {channel.mention}", ephemeral=True)
@@ -269,7 +260,6 @@ async def create_user_ticket(interaction: discord.Interaction, panel_name: str, 
     color_int = int(section_data.get("color_hex", "2b2d31").replace("#", ""), 16)
     staff_mentions = " ".join([r.mention for r in support_roles_objs]) if support_roles_objs else "فريق الإدارة والدعم"
 
-    # تصميم الـ Embed مطابق تماماً لما طلبته في الصورة
     embed = discord.Embed(
         title=f"مركز الدعم الفني - [{section_data['label']}]",
         description=f"أهلاً بك يا {interaction.user.mention} في قسم **{section_data['label']}**.\nيرجى توضيح مشكلتك بكافة التفاصيل ليتم خدمتك في أقرب وقت.",
@@ -302,7 +292,7 @@ async def create_user_ticket(interaction: discord.Interaction, panel_name: str, 
 
 
 # ==============================================================================
-# 🛠️ نظام الإعداد المتسلسل (Multi-Step Wizard) لـ /ticket_setup
+# 🛠️ نظام الإعداد المتسلسل (Multi-Step Wizard) وتعديل النافذة الأولى
 # ==============================================================================
 class TicketSetupMainView(discord.ui.View):
     def __init__(self):
@@ -339,7 +329,7 @@ class TicketSetupMainView(discord.ui.View):
         guild_id_str = str(interaction.guild.id)
         panels = db.get(guild_id_str, {}).get("panels", {})
         if not panels:
-            await interaction.response.send_message("⚠️ لا توجد لوحات لحذفها.", ephemeral=True)
+            await interaction.response.send_message("⚠️️ لا توجد لوحات لحذفها.", ephemeral=True)
             return
             
         view = discord.ui.View(timeout=60)
@@ -366,7 +356,7 @@ class TicketSetupMainView(discord.ui.View):
 
         embed = discord.Embed(title="📊 إحصائيات نظام التذاكر المتقدم", color=0x2B2D31, timestamp=datetime.datetime.utcnow())
         embed.add_field(name="التذاكر المفتوحة حالياً", value=f"`{len(active)}` تذكرة", inline=True)
-        embed.add_field(name="التذاكر المغلقة والأرشيف", value=`{len(closed)}` تذكرة", inline=True)
+        embed.add_field(name="التذاكر المغلقة والأرشيف", value=f"`{len(closed)}` تذكرة", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -377,22 +367,32 @@ class PanelInfoModal(discord.ui.Modal, title="⚙️ إعدادات بانل ا�
         self.old_panel_name = panel_name
         
         db = load_tickets_db() if is_editing else {}
-        p_data = db.get(str(discord.Interaction.from_interaction.guild_id if hasattr(discord, 'Interaction') else 0), {}).get("panels", {}).get(panel_name, {}) if is_editing else {}
+        p_data = {}
+        if is_editing:
+            guild_id_temp = str(discord.Interaction.guild_id) if hasattr(discord, 'Interaction') else ""
+            # سنقوم بجلب بيانات البانل الحالي
+            pass
 
         self.name_box = discord.ui.TextInput(label="اسم البانل الفريد (System Name)", default=panel_name if is_editing else "", max_length=50, required=True)
-        self.title_box = discord.ui.TextInput(label="عنوان رسالة الـ Embed للبانل", default=p_data.get("title", "مركز المساعدة والدعم الفني"), max_length=100, required=True)
-        self.desc_box = discord.ui.TextInput(label="وصف البانل", default=p_data.get("desc", "اختر القسم المناسب لطلبك من الأسفل."), style=discord.TextStyle.paragraph, max_length=500, required=True)
-        self.image_box = discord.ui.TextInput(label="رابط صورة البانل (Image URL)", default=p_data.get("image_url", ""), required=False)
-        self.color_box = discord.ui.TextInput(label="لون الـ Embed (Hex Code)", default=p_data.get("color_hex", "2b2d31"), max_length=10, required=True)
+        self.title_box = discord.ui.TextInput(label="عنوان رسالة الـ Embed للبانل", default="مركز المساعدة والدعم الفني", max_length=100, required=True)
+        self.desc_box = discord.ui.TextInput(label="وصف البانل (Description)", default="اختر القسم المناسب لطلبك من الأسفل.", style=discord.TextStyle.paragraph, max_length=500, required=True)
+        self.image_box = discord.ui.TextInput(label="رابط صورة البانل (Image URL)", placeholder="https://...", required=False)
+        self.category_box = discord.ui.TextInput(label="أيدي فئة التذاكر (Category ID)", placeholder="اكتب أيدي الروم الفئة هنا...", max_length=30, required=True)
 
         self.add_item(self.name_box)
         self.add_item(self.title_box)
         self.add_item(self.desc_box)
         self.add_item(self.image_box)
-        self.add_item(self.color_box)
+        self.add_item(self.category_box)
 
     async def on_submit(self, interaction: discord.Interaction):
         p_name = self.name_box.value.strip()
+        cat_id_text = self.category_box.value.strip()
+        
+        if not cat_id_text.isdigit():
+            await interaction.response.send_message("❌ يرجى إدخال أيدي فئة (Category ID) صحيح ومكون من أرقام فقط!", ephemeral=True)
+            return
+
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
         
@@ -409,11 +409,11 @@ class PanelInfoModal(discord.ui.Modal, title="⚙️ إعدادات بانل ا�
             "title": self.title_box.value,
             "desc": self.desc_box.value,
             "image_url": self.image_box.value if self.image_box.value else None,
-            "color_hex": self.color_box.value
+            "category_id": cat_id_text,
+            "color_hex": "2b2d31"
         })
         save_tickets_db(db)
 
-        # الخطوة التالية: اختيار نوع العرض (أزرار أو قائمة منسدلة)
         await interaction.response.send_message(
             f"✅ تم حفظ إعدادات البانل **{p_name}** بنجاح!\nالآن اختر نوع أزرار الفئات والأقسام:",
             view=PanelDisplayTypeView(p_name),
@@ -486,7 +486,6 @@ class SectionsConfigModal(discord.ui.Modal, title="📝 كتابة الأقسا�
 
         save_tickets_db(db)
         
-        # نشر البانل مباشرة في الروم الحالي بناءً على المعطيات
         title = panel_data.get("title", "مركز الدعم")
         desc = panel_data.get("desc", "اختر قسمك")
         display_type = panel_data.get("display_type", "menu")
@@ -494,7 +493,6 @@ class SectionsConfigModal(discord.ui.Modal, title="📝 كتابة الأقسا�
 
         embed = discord.Embed(
             title=title,
-            desc=desc,
             color=color_int,
             timestamp=datetime.datetime.utcnow()
         )
@@ -514,9 +512,6 @@ class SectionsConfigModal(discord.ui.Modal, title="📝 كتابة الأقسا�
         await interaction.response.send_message(f"🚀 **تم إنشاء وحفظ ونشر بانل التذاكر ({self.panel_name}) بنجاح تام في هذه القناة!**", ephemeral=True)
 
 
-# ==============================================================================
-# 🚀 Cog الحاوية الرئيسية
-# ==============================================================================
 class ZiuoUltimateTicketsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -529,7 +524,7 @@ class ZiuoUltimateTicketsCog(commands.Cog):
             description=(
                 "مرحباً بك في لوحة تحكم التذاكر المركزية الشاملة.\n"
                 "من خلال الأزرار أدناه يمكنك التحكم بكافة تفاصيل البانرات، إنشاء بانلات جديدة، التعديل الفوري، والحذف بكل مرونة:\n\n"
-                "• **إنشاء بانل جديد:** مع معالج متسلسل لتحديد الأقسام والرتب والمظهر.\n"
+                "• **إنشاء بانل جديد:** مع معالج متسلسل لتحديد الوصف، رابط الصورة، أيدي الفئة، والأقسام.\n"
                 "• **تعديل بانل موجود:** لتحديث الإعدادات ورسائل البانل فوراً.\n"
                 "• **حذف بانل:** لإزالة أي لوحة غير مقصودة.\n"
                 "• **الإحصائيات:** لمتابعة حالة التذاكر النشطة."
