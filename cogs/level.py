@@ -5,7 +5,6 @@ import datetime
 import random
 import time
 import sqlite3
-import os
 
 # ==============================================================================
 # 🗄️ إعدادات وتجهيز قاعدة البيانات الدائمة (SQLite3 Database Core)
@@ -16,7 +15,6 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # جدول إعدادات السيرفر
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS server_settings (
             guild_id INTEGER PRIMARY KEY,
@@ -26,11 +24,17 @@ def init_db():
             level_message TEXT DEFAULT '✨ كفو يا {user}! لقد أثبتَّ حضورك وصعدت بنجاح إلى المستوى **`{level}`**!',
             level_image TEXT,
             reset_type TEXT DEFAULT 'يومي',
+            reset_time TEXT DEFAULT '00:00',
             allowed_role_id INTEGER
         )
     """)
     
-    # جدول رتب المكافآت للمستويات
+    # التأكد من وجود عمود reset_time لو القاعدة قديمة
+    try:
+        cursor.execute("ALTER TABLE server_settings ADD COLUMN reset_time TEXT DEFAULT '00:00'")
+    except:
+        pass
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS role_rewards (
             guild_id INTEGER,
@@ -40,7 +44,6 @@ def init_db():
         )
     """)
     
-    # جدول رومات الحظر (Blacklisted Channels)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS blacklisted_channels (
             guild_id INTEGER,
@@ -49,7 +52,6 @@ def init_db():
         )
     """)
     
-    # جدول مستويات الأعضاء والتفاعل
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_stats (
             guild_id INTEGER,
@@ -66,28 +68,25 @@ def init_db():
 
 init_db()
 
-# دوال جلب وحفظ البيانات من القاعدة
 def get_db_settings(guild_id: int):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT status, multiplier, announcement_channel, level_message, level_image, reset_type, allowed_role_id FROM server_settings WHERE guild_id = ?", (guild_id,))
+    cursor.execute("SELECT status, multiplier, announcement_channel, level_message, level_image, reset_type, reset_time, allowed_role_id FROM server_settings WHERE guild_id = ?", (guild_id,))
     row = cursor.fetchone()
     
     if not row:
         cursor.execute("""
-            INSERT INTO server_settings (guild_id, status, multiplier, level_message, reset_type)
-            VALUES (?, 1, 1, '✨ كفو يا {user}! لقد أثبتَّ حضورك وصعدت بنجاح إلى المستوى **`{level}`**!', 'يومي')
+            INSERT INTO server_settings (guild_id, status, multiplier, level_message, reset_type, reset_time)
+            VALUES (?, 1, 1, '✨ كفو يا {user}! لقد أثبتَّ حضورك وصعدت بنجاح إلى المستوى **`{level}`**!', 'يومي', '00:00')
         """, (guild_id,))
         conn.commit()
-        cursor.execute("SELECT status, multiplier, announcement_channel, level_message, level_image, reset_type, allowed_role_id FROM server_settings WHERE guild_id = ?", (guild_id,))
+        cursor.execute("SELECT status, multiplier, announcement_channel, level_message, level_image, reset_type, reset_time, allowed_role_id FROM server_settings WHERE guild_id = ?", (guild_id,))
         row = cursor.fetchone()
     
-    # جلب رتب المكافآت
     cursor.execute("SELECT level, role_id FROM role_rewards WHERE guild_id = ?", (guild_id,))
     rewards_rows = cursor.fetchall()
     role_rewards = {str(lvl): r_id for lvl, r_id in rewards_rows}
 
-    # جلب الرومات المحظورة
     cursor.execute("SELECT channel_id FROM blacklisted_channels WHERE guild_id = ?", (guild_id,))
     blacklist_rows = cursor.fetchall()
     blacklisted_channels = [r[0] for r in blacklist_rows]
@@ -101,7 +100,8 @@ def get_db_settings(guild_id: int):
         "level_message": row[3],
         "level_image": row[4],
         "reset_type": row[5],
-        "allowed_role_id": row[6],
+        "reset_time": row[6] or "00:00",
+        "allowed_role_id": row[7],
         "role_rewards": role_rewards,
         "blacklisted_channels": blacklisted_channels
     }
@@ -113,7 +113,6 @@ def update_db_setting(guild_id: int, column: str, value):
     conn.commit()
     conn.close()
 
-# دالة توليد إيمبد لوحة التحكم المحدثة
 def generate_panel_embed(guild: discord.Guild):
     cfg = get_db_settings(guild.id)
     status_str = "مفعّل 🟢" if cfg["status"] else "متوقف 🔴"
@@ -121,20 +120,14 @@ def generate_panel_embed(guild: discord.Guild):
     allowed_role_disp = f"<@&{cfg['allowed_role_id']}>" if cfg['allowed_role_id'] else "متاح للجميع 🌐"
     blacklist_disp = ", ".join([f"<#{cid}>" for cid in cfg["blacklisted_channels"]]) if cfg["blacklisted_channels"] else "لا توجد رومات مستثناة 📭"
     
-    reset_schedule_desc = {
-        "يومي": "كل يوم الساعة 12:00 منتصف الليل 🕛",
-        "اسبوعي": "كل يوم جمعة الساعة 12:00 منتصف الليل 📅",
-        "شهري": "أول يوم من كل شهر الساعة 12:00 منتصف الليل 🗓"
-    }.get(cfg["reset_type"], "يومي (12:00 منتصف الليل)")
-
     embed = discord.Embed(
-        title="⚙️ لـوحـة تـحـكـم نـظام الـمـسـتـويـات (Secure Pro)",
+        title="⚙️️ لـوحـة تـحـكـم نـظام الـمـسـتـويـات (3-Inputs Pro)",
         description=(
-            "مرحباً بك في لوحة الإدارة المركزية الآمنة لنظام التفاعل.\n"
-            "جميع التعديلات محفوظة بشكل دائم في قاعدة البيانات:\n\n"
+            "مرحباً بك في لوحة الإدارة المركزية المحدثة لنظام التفاعل.\n"
+            "جميع الخيارات والإعدادات محفوظة بداخل قاعدة البيانات:\n\n"
             f"• **حالة النظام العامة:** {status_str}\n"
             f"• **نوع ونظام الريسيت:** `{cfg['reset_type']}` 📅\n"
-            f"• **موعد إرسال التوب التلقائي:** `{reset_schedule_desc}` ⏰\n"
+            f"• **وقت إرسال التوب المحدد:** `{cfg['reset_time']}` ⏰\n"
             f"• **روم إعلانات الترقية والتوب:** {chan_disp}\n"
             f"• **رتبة التفاعل المخصصة:** {allowed_role_disp}\n"
             f"• **مضاعف النقاط النشط:** `{cfg['multiplier']}x` ⚡\n"
@@ -144,17 +137,23 @@ def generate_panel_embed(guild: discord.Guild):
         color=0x2B2D31,
         timestamp=datetime.datetime.utcnow()
     )
-    embed.set_footer(text="Secure Database Core ✦ Live Update")
+    embed.set_footer(text="Advanced Core ✦ 3-Inputs Update")
     return embed
 
 # ==============================================================================
-# 🛡️️ الواجهات المنبثقة (Modals) مع التحقق الأمني المتقدم للصلاحيات
+# 🛠️ الواجهات المنبثقة (Modals) بالخانات الثلاث المطلوبة
 # ==============================================================================
-class ResetConfigModal(discord.ui.Modal, title="⚙️ إعدادات الريسيت وجدولة التوب"):
+class ResetConfigModal(discord.ui.Modal, title="⚙️ إعدادات الريسيت وجدولة التوب المتقدمة"):
     reset_type_box = discord.ui.TextInput(
         label="نوع نظام الريسيت (يومي / اسبوعي / شهري)",
         default="يومي",
         max_length=50,
+        required=True
+    )
+    time_box = discord.ui.TextInput(
+        label="وقت إرسال التوب (مثال: 15:00 أو 00:00)",
+        default="00:00",
+        max_length=10,
         required=True
     )
     channel_id_box = discord.ui.TextInput(
@@ -169,6 +168,7 @@ class ResetConfigModal(discord.ui.Modal, title="⚙️ إعدادات الريس
             await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
             return
 
+        # 1. تحديث نوع الريسيت
         raw_type = self.reset_type_box.value.strip()
         if "اسبوع" in raw_type.lower() or "أسبوع" in raw_type.lower():
             r_type = "اسبوعي"
@@ -176,15 +176,19 @@ class ResetConfigModal(discord.ui.Modal, title="⚙️ إعدادات الريس
             r_type = "شهري"
         else:
             r_type = "يومي"
-
         update_db_setting(interaction.guild.id, "reset_type", r_type)
 
+        # 2. تحديث وقت الإرسال
+        t_val = self.time_box.value.strip()
+        update_db_setting(interaction.guild.id, "reset_time", t_val)
+
+        # 3. تحديث روم الإعلانات
         chan_text = self.channel_id_box.value.strip()
         if chan_text.isdigit():
             update_db_setting(interaction.guild.id, "announcement_channel", int(chan_text))
 
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
-        await interaction.followup.send("🔄 **تم تحديث أوقات الريسيت وجدولة التوب وحفظها في قاعدة البيانات!**", ephemeral=True)
+        await interaction.followup.send("🔄 **تم تحديث إعدادات الريسيت، الوقت، والروم بنجاح تام!**", ephemeral=True)
 
 class AllowedRoleModal(discord.ui.Modal, title="🛡️ تحديد رتبة التفاعل المخصصة"):
     role_id_box = discord.ui.TextInput(
@@ -196,7 +200,7 @@ class AllowedRoleModal(discord.ui.Modal, title="🛡️ تحديد رتبة ال
 
     async def on_submit(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
+            await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
 
         val = self.role_id_box.value.strip()
@@ -208,7 +212,7 @@ class AllowedRoleModal(discord.ui.Modal, title="🛡️ تحديد رتبة ال
                 update_db_setting(interaction.guild.id, "allowed_role_id", r_obj.id)
 
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
-        await interaction.followup.send("🔒 **تم تحديث رتبة التفاعل وحفظها بنجاح!**", ephemeral=True)
+        await interaction.followup.send("🔒 **تم تحديث رتبة التفاعل بنجاح!**", ephemeral=True)
 
 class BlacklistChannelModal(discord.ui.Modal, title="🚫 إدارة رومات منع احتساب الـ XP"):
     action_box = discord.ui.TextInput(
@@ -226,14 +230,14 @@ class BlacklistChannelModal(discord.ui.Modal, title="🚫 إدارة رومات 
 
     async def on_submit(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
+            await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
 
         action = self.action_box.value.strip().lower()
         chan_text = self.channel_id_box.value.strip()
 
         if not chan_text.isdigit():
-            await interaction.response.send_message("❌ يرجى إدخال أيدي روم صحيح (أرقام فقط)!", ephemeral=True)
+            await interaction.response.send_message("❌ يرجى إدخال أيدي روم صحيح!", ephemeral=True)
             return
 
         cid = int(chan_text)
@@ -245,7 +249,7 @@ class BlacklistChannelModal(discord.ui.Modal, title="🚫 إدارة رومات 
             conn.commit()
             conn.close()
             await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
-            await interaction.followup.send(f"🚫 **تمت إضافة الروم <#{cid}> لقائمة الحظر الدائمة!**", ephemeral=True)
+            await interaction.followup.send(f"🚫 **تمت إضافة الروم <#{cid}> لقائمة الحظر!**", ephemeral=True)
         elif action == "remove":
             cursor.execute("DELETE FROM blacklisted_channels WHERE guild_id = ? AND channel_id = ?", (interaction.guild.id, cid))
             conn.commit()
@@ -267,12 +271,12 @@ class CustomMessageModal(discord.ui.Modal, title="💬 تعديل رسالة ا�
 
     async def on_submit(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
+            await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
 
         update_db_setting(interaction.guild.id, "level_message", self.msg_box.value)
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
-        await interaction.followup.send("✨ **تم تحديث رسالة الترقية وحفظها بنجاح!**", ephemeral=True)
+        await interaction.followup.send("✨ **تم تحديث رسالة الترقية بنجاح!**", ephemeral=True)
 
 class AddRewardRoleModal(discord.ui.Modal, title="🎁 ربط رتبة مكافأة بمستوى معين"):
     lvl_box = discord.ui.TextInput(
@@ -290,7 +294,7 @@ class AddRewardRoleModal(discord.ui.Modal, title="🎁 ربط رتبة مكاف�
 
     async def on_submit(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
+            await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
 
         try:
@@ -312,7 +316,7 @@ class AddRewardRoleModal(discord.ui.Modal, title="🎁 ربط رتبة مكاف�
         conn.close()
 
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
-        await interaction.followup.send(f"🎁 **تم ربط المستوى `{level_num}` بالرتبة وحفظها بقاعدة البيانات بنجاح!**", ephemeral=True)
+        await interaction.followup.send(f"🎁 **تم ربط المستوى `{level_num}` بالرتبة بنجاح!**", ephemeral=True)
 
 class SetMultiplierModal(discord.ui.Modal, title="⚡ تحديد مضاعف النقاط (Multiplier)"):
     mult_box = discord.ui.TextInput(
@@ -324,7 +328,7 @@ class SetMultiplierModal(discord.ui.Modal, title="⚡ تحديد مضاعف ال
 
     async def on_submit(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
+            await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
 
         try:
@@ -337,7 +341,7 @@ class SetMultiplierModal(discord.ui.Modal, title="⚡ تحديد مضاعف ال
 
         update_db_setting(interaction.guild.id, "multiplier", val)
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
-        await interaction.followup.send(f"⚡ **تم ضبط مضاعف النقاط ليصبح `{val}x` وحفظه بنجاح!**", ephemeral=True)
+        await interaction.followup.send(f"⚡ **تم ضبط مضاعف النقاط ليصبح `{val}x`!**", ephemeral=True)
 
 # ==============================================================================
 # 🎛 لوحة التحكم الإدارية المتكاملة مع الأزرار كاملة
@@ -346,7 +350,7 @@ class AdminPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="تشغيل/إيقاف", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="p_tgl_v13")
+    @discord.ui.button(label="تشغيل/إيقاف", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="p_tgl_v14")
     async def toggle_sys(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
@@ -356,49 +360,49 @@ class AdminPanelView(discord.ui.View):
         update_db_setting(interaction.guild.id, "status", new_status)
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=self)
 
-    @discord.ui.button(label="الريسيت وجدولة التوب", style=discord.ButtonStyle.primary, emoji="📅", row=0, custom_id="p_reset_v13")
+    @discord.ui.button(label="الريسيت وجدولة التوب", style=discord.ButtonStyle.primary, emoji="📅", row=0, custom_id="p_reset_v14")
     async def reset_config_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(ResetConfigModal())
 
-    @discord.ui.button(label="استثناء الرومات (XP)", style=discord.ButtonStyle.secondary, emoji="🚫", row=0, custom_id="p_blacklist_v13")
+    @discord.ui.button(label="استثناء الرومات (XP)", style=discord.ButtonStyle.secondary, emoji="🚫", row=0, custom_id="p_blacklist_v14")
     async def blacklist_channels_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(BlacklistChannelModal())
 
-    @discord.ui.button(label="إضافة رتبة مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=1, custom_id="p_reward_v13")
+    @discord.ui.button(label="إضافة رتبة مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=1, custom_id="p_reward_v14")
     async def add_reward(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(AddRewardRoleModal())
 
-    @discord.ui.button(label="تعديل رسالة الصعود", style=discord.ButtonStyle.secondary, emoji="💬", row=1, custom_id="p_msg_v13")
+    @discord.ui.button(label="تعديل رسالة الصعود", style=discord.ButtonStyle.secondary, emoji="💬", row=1, custom_id="p_msg_v14")
     async def edit_msg(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(CustomMessageModal())
 
-    @discord.ui.button(label="رتبة التفاعل", style=discord.ButtonStyle.secondary, emoji="🛡️", row=2, custom_id="p_role_v13")
+    @discord.ui.button(label="رتبة التفاعل", style=discord.ButtonStyle.secondary, emoji="🛡️", row=2, custom_id="p_role_v14")
     async def allowed_role_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(AllowedRoleModal())
 
-    @discord.ui.button(label="ضبط المضاعف", style=discord.ButtonStyle.danger, emoji="⚡", row=2, custom_id="p_mult_v13")
+    @discord.ui.button(label="ضبط المضاعف", style=discord.ButtonStyle.danger, emoji="⚡", row=2, custom_id="p_mult_v14")
     async def set_mult(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(SetMultiplierModal())
 
-    @discord.ui.button(label="إحصائيات السيرفر", style=discord.ButtonStyle.secondary, emoji="📊", row=2, custom_id="p_stats_v13")
+    @discord.ui.button(label="إحصائيات السيرفر", style=discord.ButtonStyle.secondary, emoji="📊", row=2, custom_id="p_stats_v14")
     async def server_stats_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         gid = interaction.guild.id
         conn = sqlite3.connect(DB_FILE)
@@ -412,12 +416,12 @@ class AdminPanelView(discord.ui.View):
         cfg = get_db_settings(gid)
         
         embed = discord.Embed(
-            title="📊 إحصائيات ونشاط نظام الليفلات الدائم",
+            title="📊 إحصائيات ونشاط نظام الليفلات",
             description=(
                 f"• **عدد الأعضاء النشطين:** `{total_users}` عضو\n"
                 f"• **إجمالي الرسائل المحتسبة:** `{total_msgs}` رسالة\n"
                 f"• **مضاعف النقاط الحالي:** `{cfg['multiplier']}x`\n"
-                f"• **نظام الريسيت النشط:** `{cfg['reset_type']}`"
+                f"• **وقت الإرسال المحدد:** `{cfg['reset_time']}`"
             ),
             color=0x2B2D31,
             timestamp=datetime.datetime.utcnow()
@@ -462,7 +466,7 @@ class TopLeaderboardView(discord.ui.View):
         embed.set_footer(text=f"Page {self.page + 1} of {self.max_pages}")
         return embed
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="◀", custom_id="t_prev_v13")
+    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="◀", custom_id="t_prev_v14")
     async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.page > 0:
             self.page -= 1
@@ -471,7 +475,7 @@ class TopLeaderboardView(discord.ui.View):
         else:
             await interaction.response.defer()
 
-    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_myrank_v13")
+    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_myrank_v14")
     async def my_rank_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = interaction.user.id
         found_idx = None
@@ -488,7 +492,7 @@ class TopLeaderboardView(discord.ui.View):
         else:
             await interaction.response.send_message("❌ ليس لديك تفاعل مسجل بعد!", ephemeral=True)
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="▶", custom_id="t_next_v13")
+    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="▶", custom_id="t_next_v14")
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.page < self.max_pages - 1:
             self.page += 1
@@ -498,7 +502,7 @@ class TopLeaderboardView(discord.ui.View):
             await interaction.response.defer()
 
 # ==============================================================================
-# 🚀 محرك التشغيل البرمجي والمنطق الأساسي (Database & Advanced Engine)
+# 🚀 محرك التشغيل البرمجي والمنطق الأساسي
 # ==============================================================================
 class AdvancedLevelSystem(commands.Cog):
     def __init__(self, bot):
@@ -508,14 +512,19 @@ class AdvancedLevelSystem(commands.Cog):
     def cog_unload(self):
         self.auto_top_announcement.cancel()
 
-    @tasks.loop(hours=24)
+    @tasks.loop(minutes=1)
     async def auto_top_announcement(self):
+        now_time = datetime.datetime.now().strftime("%H:%M")
         for guild in self.bot.guilds:
             gid = guild.id
             cfg = get_db_settings(gid)
             if not cfg["status"]:
                 continue
             
+            # مطابقة الوقت المحدد بالدقيقة لتنفيذ الإرسال التلقائي بدقة
+            if cfg.get("reset_time") != now_time:
+                continue
+
             chan_id = cfg.get("announcement_channel")
             target_channel = guild.get_channel(chan_id) if chan_id else guild.system_channel
             if not target_channel:
@@ -532,7 +541,7 @@ class AdvancedLevelSystem(commands.Cog):
 
             view = TopLeaderboardView(guild, rows, page=0)
             try:
-                await target_channel.send("📢 **تقرير توب السيرفر التلقائي الدائم:**", embed=view.create_embed(), view=view)
+                await target_channel.send("📢 **تقرير توب السيرفر التلقائي في الموعد المحدد:**", embed=view.create_embed(), view=view)
             except:
                 pass
 
@@ -565,7 +574,7 @@ class AdvancedLevelSystem(commands.Cog):
                 r_target = member.guild.get_role(int(assigned_role_id))
                 if r_target:
                     try:
-                        await member.add_roles(r_target, reason=f"Database Level Engine: Reached level {new_lvl}")
+                        await member.add_roles(r_target, reason=f"Level Engine: Reached level {new_lvl}")
                     except:
                         pass
 
@@ -582,7 +591,7 @@ class AdvancedLevelSystem(commands.Cog):
                 if cfg.get("level_image"):
                     embed.set_image(url=cfg["level_image"])
 
-                embed.set_footer(text="Database Protocol ✦ Ultimate Engine")
+                embed.set_footer(text="Level System ✦ Pro Engine")
                 
                 chan_id = cfg.get("announcement_channel")
                 target_channel = member.guild.get_channel(chan_id) if chan_id else member.guild.system_channel
@@ -607,7 +616,6 @@ class AdvancedLevelSystem(commands.Cog):
             return
 
         now_ts = time.time()
-        # Cooldown بسيط لمنع السبام
         if not hasattr(self, "cooldowns"):
             self.cooldowns = {}
         if gid not in self.cooldowns:
@@ -641,7 +649,7 @@ class AdvancedLevelSystem(commands.Cog):
 
         await self.check_level_up(message.author, gid, udata, cfg)
 
-    @app_commands.command(name="levels_panel", description="[الإدارة] لوحة التحكم الكاملة والمتقدمة لنظام الليفلات الدائم")
+    @app_commands.command(name="levels_panel", description="[الإدارة] لوحة التحكم الكاملة والمتقدمة لنظام الليفلات")
     @app_commands.checks.has_permissions(administrator=True)
     async def levels_panel(self, interaction: discord.Interaction):
         await interaction.response.send_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView(), ephemeral=False)
@@ -663,7 +671,7 @@ class AdvancedLevelSystem(commands.Cog):
         embed = discord.Embed(
             title=f"📊 بطاقة إحصائيات المستوى - {target.display_name}",
             description=(
-                f"سجل التفاعل والنشاط المحفوظ بقاعدة البيانات:\n\n"
+                f"سجل التفاعل والنشاط:\n\n"
                 f"• **المستوى الحالي:** `{udata['level']}` 🏆\n"
                 f"• **نقاط الخبرة (XP):** `{udata['xp']}` / `{int(req_xp)}` 🌟\n"
                 f"• **الرسائل المرسلة:** `{udata['messages']}` رسالة 📝"
@@ -672,10 +680,10 @@ class AdvancedLevelSystem(commands.Cog):
             timestamp=datetime.datetime.utcnow()
         )
         embed.set_thumbnail(url=target.display_avatar.url)
-        embed.set_footer(text="Secure Rank System ✦ بطاقة العضو")
+        embed.set_footer(text="Rank System ✦ بطاقة العضو النشط")
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    @app_commands.command(name="top", description="عرض لوحة شرف المتصدرين لأعضاء السيرفر من قاعدة البيانات الدائمة")
+    @app_commands.command(name="top", description="عرض لوحة شرف المتصدرين لأعضاء السيرفر مع أزرار التنقل")
     async def top(self, interaction: discord.Interaction):
         gid = interaction.guild.id
         conn = sqlite3.connect(DB_FILE)
@@ -712,13 +720,13 @@ class AdvancedLevelSystem(commands.Cog):
             r_target = interaction.guild.get_role(int(assigned_role_id))
             if r_target:
                 try:
-                    await member.add_roles(r_target, reason=f"Admin Database SetLevel: Set to level {new_lvl}")
+                    await member.add_roles(r_target, reason=f"Admin SetLevel: Set to level {new_lvl}")
                     role_mention_str = r_target.mention
                 except:
                     role_mention_str = "فشل منح الرتبة (تأكد من الصلاحيات)"
 
         await interaction.response.send_message(
-            f"🎯 **تم تحديث مستوى العضو وحفظه في قاعدة البيانات بنجاح!**\n"
+            f"🎯 **تم تحديث مستوى العضو بنجاح تام!**\n"
             f"• العضو: {member.mention}\n"
             f"• المستوى الجديد: **`{new_lvl}`** 🏆\n"
             f"• رتبة المكافأة المرتبطة: {role_mention_str}",
