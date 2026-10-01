@@ -217,7 +217,7 @@ class QuickRepliesSelect(discord.ui.Select):
 
 
 # ==============================================================================
-# 🎛️ واجهات تحكم التذاكر الداخلية
+# 🎛️ واجهات تحكم التذاكر الداخلية (بدون زر إعادة التعيين)
 # ==============================================================================
 class TicketInsideView(discord.ui.View):
     def __init__(self, guild_id: int, panel_name: str):
@@ -321,29 +321,7 @@ class TicketInsideView(discord.ui.View):
 
         await interaction.response.send_message(f"🔊 ╎ تم إنشاء غرفة صوتية مؤقتة خاصة بهذه التذكرة بنجاح: {voice_chan.mention}", ephemeral=False)
 
-    @discord.ui.button(label="إعادة تعيين الفئة", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="reset_ticket_category_inside_btn", row=2)
-    async def reset_ticket_category_inside(self, interaction: discord.Interaction, button: discord.ui.Button):
-        db = load_tickets_db()
-        p_data = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {})
-        if not p_data:
-            await interaction.response.send_message("❌ ╎ هذا البانل المرتبط بالتذكرة لم يعد موجوداً.", ephemeral=True)
-            return
-        
-        embed = discord.Embed(
-            title=p_data.get("title"),
-            description=p_data.get("desc") + "\n\n____________________________________________________________________\n✦ **اختر القسم المناسب لطلبك من القائمة أدناه:**",
-            color=0x2B2D31,
-            timestamp=datetime.datetime.utcnow()
-        )
-        if p_data.get("image_url"):
-            embed.set_image(url=p_data["image_url"])
-        embed.set_footer(text=f"Z I UO Community ✦ Panel: {self.panel_name}")
-
-        is_m = p_data.get("display_type", "menu") == "menu"
-        await interaction.channel.send(embed=embed, view=PanelControlView(interaction.guild.id, self.panel_name, is_m))
-        await interaction.response.send_message("🔄 ╎ تم إعادة تعيين فئة التذكرة وإرسال قائمة الخيارات الجديدة بنجاح داخل الروم!", ephemeral=True)
-
-    @discord.ui.button(label="تنبيه ذكي", style=discord.ButtonStyle.secondary, emoji="🔔", custom_id="smart_ping_ticket_btn_v7", row=3)
+    @discord.ui.button(label="تنبيه ذكي", style=discord.ButtonStyle.secondary, emoji="🔔", custom_id="smart_ping_ticket_btn_v7", row=2)
     async def smart_ping(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
@@ -406,7 +384,7 @@ class AddMemberModal(discord.ui.Modal, title="➕ ╎ إضافة عضو إلى �
 
 
 # ==============================================================================
-# 📋 الأسئلة المخصصة وإنشاء التذاكر (المعدلة والمصلحة لتفادي أي أخطاء)
+# 📋 الأسئلة المخصصة وإنشاء التذاكر
 # ==============================================================================
 class DynamicTicketSelect(discord.ui.Select):
     def __init__(self, guild_id: int, panel_name: str):
@@ -421,7 +399,6 @@ class DynamicTicketSelect(discord.ui.Select):
                 label_str = data["label"][:100]
                 desc_str = data["description"][:100] if data.get("description") else "قسم التذاكر"
                 
-                # تصحيح آمن للإيموجي لمنع خطأ Invalid Emoji
                 emoji_val = data.get("emoji", "🎫")
                 try:
                     if emoji_val.isdigit():
@@ -494,9 +471,13 @@ class TicketReasonModal(discord.ui.Modal, title="🎫 ╎ تفاصيل طلب ا
         await create_user_ticket_execution(interaction, self.panel_name, self.section_key, reason_text)
 
 
+# ==============================================================================
+# 🎛️ بانل التحكم وزر إعادة تعيين الفئة تحت الأقسام في البانل الأساسي
+# ==============================================================================
 class PanelControlView(discord.ui.View):
     def __init__(self, guild_id: int, panel_name: str, is_menu: bool):
         super().__init__(timeout=None)
+        self.guild_id = guild_id
         self.panel_name = panel_name
         
         if is_menu:
@@ -522,6 +503,34 @@ class PanelControlView(discord.ui.View):
                         await inter.response.send_modal(TicketReasonModal(p, k))
                 btn.callback = btn_cb
                 self.add_item(btn)
+
+    # زر إعادة تعيين الفئة / البانل أصبح هنا تحت الأقسام في البانل الأساسي!
+    @discord.ui.button(label="إعادة تعيين الفئة والبانل", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="reset_panel_main_btn_v7", row=4)
+    async def reset_panel_main(self, interaction: discord.Interaction, button: discord.ui.Button):
+        db = load_tickets_db()
+        p_data = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {})
+        if not p_data:
+            await interaction.response.send_message("❌ ╎ هذا البانل لم يعد موجوداً في قاعدة البيانات.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title=p_data.get("title"),
+            description=p_data.get("desc") + "\n\n____________________________________________________________________\n✦ **اختر القسم المناسب لطلبك من القائمة أدناه:**",
+            color=0x2B2D31,
+            timestamp=datetime.datetime.utcnow()
+        )
+        if p_data.get("image_url"):
+            embed.set_image(url=p_data["image_url"])
+        embed.set_footer(text=f"Z I UO Community ✦ Panel: {self.panel_name}")
+
+        is_m = p_data.get("display_type", "menu") == "menu"
+        
+        try:
+            # تحديث الرسالة الحالية مباشرة دون إرسال بانل جديد بالخطأ
+            await interaction.message.edit(embed=embed, view=PanelControlView(interaction.guild.id, self.panel_name, is_m))
+            await interaction.response.send_message("🔄 ╎ تم إعادة تعيين وتحديث بانل الأقسام بنجاح دون إرسال رسائل مكررة!", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ ╎ حدث خطأ أثناء التحديث: {e}", ephemeral=True)
 
 
 async def create_user_ticket_execution(interaction: discord.Interaction, panel_name: str, section_key: str, input_text: str, is_custom_answer: bool = False):
@@ -840,7 +849,7 @@ class SectionsConfigModal(discord.ui.Modal, title="📝 ╎ الأقسام ور�
     def __init__(self, panel_name: str):
         super().__init__()
         self.panel_name = panel_name
-        self.sections_box = discord.ui.TextInput(label="أسماء الأقسام (كل قسم في سطر)", placeholder="دعم فني\nتقديم إدارة", style=discord.TextStyle.paragraph, max_length=500, required=True)
+        self.sections_box = discord.ui.TextInput(label="أسماء الأقسام (كل قسم في سطر)", placeholder="دعم فني\nشراء منتج\nتقديم إدارة", style=discord.TextStyle.paragraph, max_length=500, required=True)
         self.roles_box = discord.ui.TextInput(label="أيدي رتب الدعم (كل أيدي في سطر)", placeholder="123456789...", style=discord.TextStyle.paragraph, max_length=500, required=True)
         self.add_item(self.sections_box)
         self.add_item(self.roles_box)
@@ -872,7 +881,10 @@ class AskDescriptionChoiceView(discord.ui.View):
 
     @discord.ui.button(label="نعم، أريد إضافة وصف", style=discord.ButtonStyle.success, emoji="✅")
     async def yes_desc(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(SectionDescriptionsModal(self.panel_name))
+        # ديناميكي منفصل لكل قسم تم إنشاؤه مسبقاً
+        db = load_tickets_db()
+        sections = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
+        await interaction.response.send_modal(DynamicSectionsDescriptionsModal(self.panel_name, sections))
 
     @discord.ui.button(label="لا، تخطي هذه الخطوة", style=discord.ButtonStyle.secondary, emoji="⏭️")
     async def no_desc(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -883,23 +895,33 @@ class AskDescriptionChoiceView(discord.ui.View):
         )
 
 
-class SectionDescriptionsModal(discord.ui.Modal, title="✍️ ╎ وصف الفئات (الحد 1000 حرف)"):
-    def __init__(self, panel_name: str):
-        super().__init__()
+# ==============================================================================
+# ✍️ مودال الوصف المنفصل تماماً لكل قسم على حدة (بدون سطر واحد لخبطة)
+# ==============================================================================
+class DynamicSectionsDescriptionsModal(discord.ui.Modal):
+    def __init__(self, panel_name: str, sections: list):
+        super().__init__(title="✍️ ╎ وصف الفئات بشكل منفصل")
         self.panel_name = panel_name
-        self.desc_box = discord.ui.TextInput(
-            label="اكتب وصف كل قسم (كل وصف في سطر)",
-            placeholder="وصف القسم الأول...\nوصف القسم الثاني...",
-            style=discord.TextStyle.paragraph,
-            max_length=1000,
-            required=True
-        )
-        self.add_item(self.desc_box)
+        self.inputs_map = {}
+
+        for sec in sections[:5]:  # أقصى حد مسموح من حقول الإدخال في الديسكورد هو 5 حقول
+            box = discord.ui.TextInput(
+                label=f"وصف قسم: {sec[:35]}",
+                placeholder=f"اكتب الوصف الخاص بـ ({sec}) هنا...",
+                style=discord.TextStyle.paragraph,
+                max_length=300,
+                required=True
+            )
+            self.inputs_map[sec] = box
+            self.add_item(box)
 
     async def on_submit(self, interaction: discord.Interaction):
-        descs = [d.strip() for d in self.desc_box.value.split("\n") if d.strip()]
+        descs_list = []
+        for sec, box in self.inputs_map.items():
+            descs_list.append(box.value.strip())
+
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_descs"] = descs
+        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_descs"] = descs_list
         save_tickets_db(db)
 
         await interaction.response.send_message(
@@ -917,7 +939,9 @@ class AskCustomQuestionsChoiceView(discord.ui.View):
 
     @discord.ui.button(label="نعم، أريد تعيين أسئلة", style=discord.ButtonStyle.success, emoji="✅")
     async def yes_questions(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(SectionCustomQuestionsModal(self.panel_name, self.use_descriptions))
+        db = load_tickets_db()
+        sections = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
+        await interaction.response.send_modal(DynamicSectionsQuestionsModal(self.panel_name, self.use_descriptions, sections))
 
     @discord.ui.button(label="لا، تخطي ونشر البانل", style=discord.ButtonStyle.secondary, emoji="🚀")
     async def no_questions(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -925,24 +949,34 @@ class AskCustomQuestionsChoiceView(discord.ui.View):
         await interaction.response.send_message("📌 ╎ اختر مكان نشر البانل المطلوب:", view=view, ephemeral=True)
 
 
-class SectionCustomQuestionsModal(discord.ui.Modal, title="❓ ╎ تعيين الأسئلة المخصصة لكل قسم"):
-    def __init__(self, panel_name: str, use_descriptions: bool):
-        super().__init__()
+# ==============================================================================
+# ❓ مودال الأسئلة المنفصل تماماً لكل قسم على حدة (القسم وتحته خانة السؤال الخاص به)
+# ==============================================================================
+class DynamicSectionsQuestionsModal(discord.ui.Modal):
+    def __init__(self, panel_name: str, use_descriptions: bool, sections: list):
+        super().__init__(title="❓ ╎ الأسئلة المخصصة لكل قسم")
         self.panel_name = panel_name
         self.use_descriptions = use_descriptions
-        self.questions_box = discord.ui.TextInput(
-            label="اكتب سؤال كل قسم (كل سؤال في سطر)",
-            placeholder="ما هو عمرك وخبرتك؟\nما هو المنتج المطلوب ورابطه؟",
-            style=discord.TextStyle.paragraph,
-            max_length=1000,
-            required=True
-        )
-        self.add_item(self.questions_box)
+        self.questions_map = {}
+
+        for sec in sections[:5]:
+            box = discord.ui.TextInput(
+                label=f"سؤال قسم: {sec[:35]}",
+                placeholder=f"اكتب السؤال الخاص بـ ({sec}) هنا...",
+                style=discord.TextStyle.paragraph,
+                max_length=300,
+                required=True
+            )
+            self.questions_map[sec] = box
+            self.add_item(box)
 
     async def on_submit(self, interaction: discord.Interaction):
-        questions = [q.strip() for q in self.questions_box.value.split("\n") if q.strip()]
+        questions_list = []
+        for sec, box in self.questions_map.items():
+            questions_list.append(box.value.strip())
+
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_questions"] = questions
+        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_questions"] = questions_list
         save_tickets_db(db)
 
         view = PublishTargetChoiceView(self.panel_name, self.use_descriptions, use_questions=True)
