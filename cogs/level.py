@@ -25,13 +25,19 @@ def init_db():
             level_image TEXT,
             reset_type TEXT DEFAULT 'يومي',
             reset_time TEXT DEFAULT '00:00',
-            allowed_role_id INTEGER
+            allowed_role_id INTEGER,
+            custom_shortcut TEXT DEFAULT '/top'
         )
     """)
     
-    # التأكد من وجود عمود reset_time لو القاعدة قديمة
+    # التأكد من وجود الأعمدة الجديدة لو القاعدة قديمة
     try:
         cursor.execute("ALTER TABLE server_settings ADD COLUMN reset_time TEXT DEFAULT '00:00'")
+    except:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE server_settings ADD COLUMN custom_shortcut TEXT DEFAULT '/top'")
     except:
         pass
     
@@ -71,16 +77,16 @@ init_db()
 def get_db_settings(guild_id: int):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT status, multiplier, announcement_channel, level_message, level_image, reset_type, reset_time, allowed_role_id FROM server_settings WHERE guild_id = ?", (guild_id,))
+    cursor.execute("SELECT status, multiplier, announcement_channel, level_message, level_image, reset_type, reset_time, allowed_role_id, custom_shortcut FROM server_settings WHERE guild_id = ?", (guild_id,))
     row = cursor.fetchone()
     
     if not row:
         cursor.execute("""
-            INSERT INTO server_settings (guild_id, status, multiplier, level_message, reset_type, reset_time)
-            VALUES (?, 1, 1, '✨ كفو يا {user}! لقد أثبتَّ حضورك وصعدت بنجاح إلى المستوى **`{level}`**!', 'يومي', '00:00')
+            INSERT INTO server_settings (guild_id, status, multiplier, level_message, reset_type, reset_time, custom_shortcut)
+            VALUES (?, 1, 1, '✨ كفو يا {user}! لقد أثبتَّ حضورك وصعدت بنجاح إلى المستوى **`{level}`**!', 'يومي', '00:00', '/top')
         """, (guild_id,))
         conn.commit()
-        cursor.execute("SELECT status, multiplier, announcement_channel, level_message, level_image, reset_type, reset_time, allowed_role_id FROM server_settings WHERE guild_id = ?", (guild_id,))
+        cursor.execute("SELECT status, multiplier, announcement_channel, level_message, level_image, reset_type, reset_time, allowed_role_id, custom_shortcut FROM server_settings WHERE guild_id = ?", (guild_id,))
         row = cursor.fetchone()
     
     cursor.execute("SELECT level, role_id FROM role_rewards WHERE guild_id = ?", (guild_id,))
@@ -102,6 +108,7 @@ def get_db_settings(guild_id: int):
         "reset_type": row[5],
         "reset_time": row[6] or "00:00",
         "allowed_role_id": row[7],
+        "custom_shortcut": row[8] or "/top",
         "role_rewards": role_rewards,
         "blacklisted_channels": blacklisted_channels
     }
@@ -121,13 +128,14 @@ def generate_panel_embed(guild: discord.Guild):
     blacklist_disp = ", ".join([f"<#{cid}>" for cid in cfg["blacklisted_channels"]]) if cfg["blacklisted_channels"] else "لا توجد رومات مستثناة 📭"
     
     embed = discord.Embed(
-        title="⚙️️ لـوحـة تـحـكـم نـظام الـمـسـتـويـات (3-Inputs Pro)",
+        title="⚙ لـوحـة تـحـكـم نـظام الـمـسـتـويـات (Pro + Shortcuts)",
         description=(
             "مرحباً بك في لوحة الإدارة المركزية المحدثة لنظام التفاعل.\n"
             "جميع الخيارات والإعدادات محفوظة بداخل قاعدة البيانات:\n\n"
             f"• **حالة النظام العامة:** {status_str}\n"
             f"• **نوع ونظام الريسيت:** `{cfg['reset_type']}` 📅\n"
             f"• **وقت إرسال التوب المحدد:** `{cfg['reset_time']}` ⏰\n"
+            f"• **الاختصار المخصص النشط:** `{cfg['custom_shortcut']}` ⚡\n"
             f"• **روم إعلانات الترقية والتوب:** {chan_disp}\n"
             f"• **رتبة التفاعل المخصصة:** {allowed_role_disp}\n"
             f"• **مضاعف النقاط النشط:** `{cfg['multiplier']}x` ⚡\n"
@@ -137,11 +145,11 @@ def generate_panel_embed(guild: discord.Guild):
         color=0x2B2D31,
         timestamp=datetime.datetime.utcnow()
     )
-    embed.set_footer(text="Advanced Core ✦ 3-Inputs Update")
+    embed.set_footer(text="Advanced Core ✦ Custom Shortcuts Update")
     return embed
 
 # ==============================================================================
-# 🛠️ الواجهات المنبثقة (Modals) بالخانات الثلاث المطلوبة
+# 🛠️ الواجهات المنبثقة (Modals)
 # ==============================================================================
 class ResetConfigModal(discord.ui.Modal, title="⚙️ إعدادات الريسيت وجدولة التوب المتقدمة"):
     reset_type_box = discord.ui.TextInput(
@@ -168,7 +176,6 @@ class ResetConfigModal(discord.ui.Modal, title="⚙️ إعدادات الريس
             await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة لإدارة السيرفر فقط!", ephemeral=True)
             return
 
-        # 1. تحديث نوع الريسيت
         raw_type = self.reset_type_box.value.strip()
         if "اسبوع" in raw_type.lower() or "أسبوع" in raw_type.lower():
             r_type = "اسبوعي"
@@ -178,17 +185,36 @@ class ResetConfigModal(discord.ui.Modal, title="⚙️ إعدادات الريس
             r_type = "يومي"
         update_db_setting(interaction.guild.id, "reset_type", r_type)
 
-        # 2. تحديث وقت الإرسال
         t_val = self.time_box.value.strip()
         update_db_setting(interaction.guild.id, "reset_time", t_val)
 
-        # 3. تحديث روم الإعلانات
         chan_text = self.channel_id_box.value.strip()
         if chan_text.isdigit():
             update_db_setting(interaction.guild.id, "announcement_channel", int(chan_text))
 
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
         await interaction.followup.send("🔄 **تم تحديث إعدادات الريسيت، الوقت، والروم بنجاح تام!**", ephemeral=True)
+
+class ShortcutConfigModal(discord.ui.Modal, title="⚡ إعدادات اختصارات الأوامر السريعة"):
+    shortcut_box = discord.ui.TextInput(
+        label="اكتب أمر الاختصار (مثال: /top أو /level)",
+        default="/top",
+        max_length=30,
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ عذراً، هذه الصلاحية مخصصة للإدارة فقط!", ephemeral=True)
+            return
+
+        sc_val = self.shortcut_box.value.strip()
+        if not sc_val.startswith("/"):
+            sc_val = "/" + sc_val
+
+        update_db_setting(interaction.guild.id, "custom_shortcut", sc_val)
+        await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=AdminPanelView())
+        await interaction.followup.send(f"⚡ **تم تعيين الاختصار المخصص بنجاح ليصبح:** `{sc_val}`", ephemeral=True)
 
 class AllowedRoleModal(discord.ui.Modal, title="🛡️ تحديد رتبة التفاعل المخصصة"):
     role_id_box = discord.ui.TextInput(
@@ -350,7 +376,7 @@ class AdminPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="تشغيل/إيقاف", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="p_tgl_v14")
+    @discord.ui.button(label="تشغيل/إيقاف", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="p_tgl_v15")
     async def toggle_sys(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
@@ -360,49 +386,56 @@ class AdminPanelView(discord.ui.View):
         update_db_setting(interaction.guild.id, "status", new_status)
         await interaction.response.edit_message(embed=generate_panel_embed(interaction.guild), view=self)
 
-    @discord.ui.button(label="الريسيت وجدولة التوب", style=discord.ButtonStyle.primary, emoji="📅", row=0, custom_id="p_reset_v14")
+    @discord.ui.button(label="الريسيت وجدولة التوب", style=discord.ButtonStyle.primary, emoji="📅", row=0, custom_id="p_reset_v15")
     async def reset_config_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(ResetConfigModal())
 
-    @discord.ui.button(label="استثناء الرومات (XP)", style=discord.ButtonStyle.secondary, emoji="🚫", row=0, custom_id="p_blacklist_v14")
+    @discord.ui.button(label="تعيين الاختصارات", style=discord.ButtonStyle.secondary, emoji="⚡", row=0, custom_id="p_shortcut_v15")
+    async def shortcut_config_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
+            return
+        await interaction.response.send_modal(ShortcutConfigModal())
+
+    @discord.ui.button(label="استثناء الرومات (XP)", style=discord.ButtonStyle.secondary, emoji="🚫", row=1, custom_id="p_blacklist_v15")
     async def blacklist_channels_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(BlacklistChannelModal())
 
-    @discord.ui.button(label="إضافة رتبة مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=1, custom_id="p_reward_v14")
+    @discord.ui.button(label="إضافة رتبة مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=1, custom_id="p_reward_v15")
     async def add_reward(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(AddRewardRoleModal())
 
-    @discord.ui.button(label="تعديل رسالة الصعود", style=discord.ButtonStyle.secondary, emoji="💬", row=1, custom_id="p_msg_v14")
+    @discord.ui.button(label="تعديل رسالة الصعود", style=discord.ButtonStyle.secondary, emoji="💬", row=1, custom_id="p_msg_v15")
     async def edit_msg(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(CustomMessageModal())
 
-    @discord.ui.button(label="رتبة التفاعل", style=discord.ButtonStyle.secondary, emoji="🛡️", row=2, custom_id="p_role_v14")
+    @discord.ui.button(label="رتبة التفاعل", style=discord.ButtonStyle.secondary, emoji="🛡️", row=2, custom_id="p_role_v15")
     async def allowed_role_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(AllowedRoleModal())
 
-    @discord.ui.button(label="ضبط المضاعف", style=discord.ButtonStyle.danger, emoji="⚡", row=2, custom_id="p_mult_v14")
+    @discord.ui.button(label="ضبط المضاعف", style=discord.ButtonStyle.danger, emoji="⚡", row=2, custom_id="p_mult_v15")
     async def set_mult(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ للأدرة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(SetMultiplierModal())
 
-    @discord.ui.button(label="إحصائيات السيرفر", style=discord.ButtonStyle.secondary, emoji="📊", row=2, custom_id="p_stats_v14")
+    @discord.ui.button(label="إحصائيات السيرفر", style=discord.ButtonStyle.secondary, emoji="📊", row=2, custom_id="p_stats_v15")
     async def server_stats_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         gid = interaction.guild.id
         conn = sqlite3.connect(DB_FILE)
@@ -421,6 +454,7 @@ class AdminPanelView(discord.ui.View):
                 f"• **عدد الأعضاء النشطين:** `{total_users}` عضو\n"
                 f"• **إجمالي الرسائل المحتسبة:** `{total_msgs}` رسالة\n"
                 f"• **مضاعف النقاط الحالي:** `{cfg['multiplier']}x`\n"
+                f"• **الاختصار المخصص النشط:** `{cfg['custom_shortcut']}`\n"
                 f"• **وقت الإرسال المحدد:** `{cfg['reset_time']}`"
             ),
             color=0x2B2D31,
@@ -466,7 +500,7 @@ class TopLeaderboardView(discord.ui.View):
         embed.set_footer(text=f"Page {self.page + 1} of {self.max_pages}")
         return embed
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="◀", custom_id="t_prev_v14")
+    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="◀", custom_id="t_prev_v15")
     async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.page > 0:
             self.page -= 1
@@ -475,7 +509,7 @@ class TopLeaderboardView(discord.ui.View):
         else:
             await interaction.response.defer()
 
-    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_myrank_v14")
+    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_myrank_v15")
     async def my_rank_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = interaction.user.id
         found_idx = None
@@ -492,7 +526,7 @@ class TopLeaderboardView(discord.ui.View):
         else:
             await interaction.response.send_message("❌ ليس لديك تفاعل مسجل بعد!", ephemeral=True)
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="▶", custom_id="t_next_v14")
+    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="▶", custom_id="t_next_v15")
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.page < self.max_pages - 1:
             self.page += 1
@@ -521,7 +555,6 @@ class AdvancedLevelSystem(commands.Cog):
             if not cfg["status"]:
                 continue
             
-            # مطابقة الوقت المحدد بالدقيقة لتنفيذ الإرسال التلقائي بدقة
             if cfg.get("reset_time") != now_time:
                 continue
 
