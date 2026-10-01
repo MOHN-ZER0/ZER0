@@ -3,7 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import datetime
 import asyncio
-from db import db  # استيراد نظام الحفظ المركزي
+from db import db
 
 class VoiceControlView(discord.ui.View):
     def __init__(self, cog, guild_id: int):
@@ -19,7 +19,7 @@ class VoiceControlView(discord.ui.View):
 
         guild = interaction.guild
         if guild.voice_client:
-            db.remove(str(guild.id))  # مسح الحفظ من قاعدة البيانات نهائياً
+            db.remove(str(guild.id))
 
             channel_name = guild.voice_client.channel.name
             await guild.voice_client.disconnect()
@@ -76,7 +76,6 @@ class VoicePresenceCog(commands.Cog):
         self.bot.loop.create_task(self.auto_reconnect_on_startup())
 
     async def auto_reconnect_on_startup(self):
-        """إعادة إدخال البوت للرومات تلقائياً فور تشغيل البوت أو عمل Restart"""
         await self.bot.wait_until_ready()
         for guild_id_str, channel_id in list(db.data.items()):
             guild = self.bot.get_guild(int(guild_id_str))
@@ -106,10 +105,8 @@ class VoicePresenceCog(commands.Cog):
                         except Exception:
                             pass
 
-    @app_commands.command(name="joinvc", description="[إدارة] إدخال البوت للروم الصوتي ليبقى متواجداً 24/7 (يتم الحفظ حتى بعد التحديث)")
-    @app_commands.describe(
-        channel="الروم الصوتي المراد دخول البوت إليه (اختياري: لو تركتها فارغة سيدخل رومك الحالي)"
-    )
+    @app_commands.command(name="joinvc", description="[إدارة] إدخال البوت للروم الصوتي ليبقى متواجداً 24/7")
+    @app_commands.describe(channel="الروم الصوتي المراد دخول البوت إليه (اختياري)")
     @app_commands.checks.has_permissions(administrator=True)
     async def joinvc(self, interaction: discord.Interaction, channel: discord.VoiceChannel = None):
         await interaction.response.defer(ephemeral=True)
@@ -119,7 +116,7 @@ class VoicePresenceCog(commands.Cog):
             if interaction.user.voice and interaction.user.voice.channel:
                 target_channel = interaction.user.voice.channel
             else:
-                await interaction.followup.send("❌ يرجى تحديد روم صوتي، أو الانضمام إلى روم صوتي أولاً لكي يدخل البوت معك!", ephemeral=True)
+                await interaction.followup.send("❌ يرجى تحديد روم صوتي، أو الانضمام إلى روم صوتي أولاً!", ephemeral=True)
                 return
 
         if not isinstance(target_channel, discord.VoiceChannel):
@@ -127,7 +124,7 @@ class VoicePresenceCog(commands.Cog):
             return
 
         guild_id_str = str(interaction.guild.id)
-        db.set(guild_id_str, target_channel.id)  # الحفظ التلقائي في قاعدة البيانات
+        db.set(guild_id_str, target_channel.id)
 
         try:
             if interaction.guild.voice_client:
@@ -143,7 +140,7 @@ class VoicePresenceCog(commands.Cog):
 
             embed = discord.Embed(
                 title="🎧 ╎ نـظـام الـتـواجـد الصـوتـي الـدائـم 24/7 〣 ｢⚡｣",
-                description=f"> تم تثبيت وحفظ البوت داخل الغرفة بنجاح (سيظل محفوظاً حتى لو تم إعادة تشغيل البوت).\n━━━━━━━━━━━━━━━━━━━━━",
+                description=f"> تم تثبيت وحفظ البوت داخل الغرفة بنجاح.\n━━━━━━━━━━━━━━━━━━━━━",
                 color=0x2b2d31,
                 timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
@@ -171,7 +168,7 @@ class VoicePresenceCog(commands.Cog):
         guild_id_str = str(interaction.guild.id)
         
         if interaction.guild.voice_client:
-            db.remove(guild_id_str)  # مسح البيانات من ملف الـ JSON
+            db.remove(guild_id_str)
             channel_name = interaction.guild.voice_client.channel.name
             await interaction.guild.voice_client.disconnect()
             
@@ -189,7 +186,7 @@ class VoicePresenceCog(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(VoicePresenceCog(bot))
-ل بأي روم صوتي في هذا السيرفر أساساً!", ephemeral=True)
+hemeral=True)
 
 async def setup(bot):
     await bot.add_cog(VoicePresenceCog(bot))
