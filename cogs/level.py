@@ -24,21 +24,20 @@ def fetch_guild_config(guild_id: int):
             "level_message": "✨ كفو يا {user}! لقد أثبتَّ حضورك وصعدت بنجاح إلى المستوى **`{level}`**!",
             "level_image": None,
             "role_rewards": {},
-            "reset_type": "12:00 AM\n12:00 PM",
+            "reset_type": "يومي",
             "allowed_role_id": None
         }
     return SERVER_DATABASE["settings"][guild_id]
 
 # ==============================================================================
-# 🛠️ الواجهات المنبثقة (Modals)
+# 🛠️ الواجهات المنبثقة (Modals) المحسنة
 # ==============================================================================
-class ResetConfigModal(discord.ui.Modal, title="⚙️ إعدادات نظام الريسيت الدوري وتوب السيرفر"):
+class ResetConfigModal(discord.ui.Modal, title="⚙️ إعدادات نظام الريسيت وتوب السيرفر"):
     reset_type_box = discord.ui.TextInput(
-        label="أوقات التسيير والتوب اليومي",
-        placeholder="12:00 AM\n12:00 PM",
-        default="12:00 AM\n12:00 PM",
-        style=discord.TextStyle.paragraph,
-        max_length=100,
+        label="نوع ونظام الريسيت (يومي / اسبوعي / شهري)",
+        placeholder="اكتب: يومي، اسبوعي، أو شهري",
+        default="يومي",
+        max_length=50,
         required=True
     )
     channel_id_box = discord.ui.TextInput(
@@ -50,15 +49,24 @@ class ResetConfigModal(discord.ui.Modal, title="⚙️ إعدادات نظام �
 
     async def on_submit(self, interaction: discord.Interaction):
         cfg = fetch_guild_config(interaction.guild.id)
-        cfg["reset_type"] = self.reset_type_box.value
+        raw_type = self.reset_type_box.value.strip()
+        
+        # تصحيح ذكي لنوع الريسيت بناءً على إدخال المستخدم
+        if "اسبوع" in raw_type.lower() or "أسبوع" in raw_type.lower():
+            cfg["reset_type"] = "اسبوعي"
+        elif "شهر" in raw_type.lower():
+            cfg["reset_type"] = "شهري"
+        else:
+            cfg["reset_type"] = "يومي"
+
         chan_text = self.channel_id_box.value.strip()
         if chan_text.isdigit():
             cfg["announcement_channel"] = int(chan_text)
 
         await interaction.response.send_message(
-            f"🔄 **تم تحديث إعدادات التسيير الدوري بنجاح تام!**\n"
-            f"• **المواعيد النشطة:**\n`{cfg['reset_type']}`\n"
-            f"• **روم الإعلانات:** <#{cfg['announcement_channel']}>" if cfg['announcement_channel'] else "• **روم الإعلانات:** الروم الحالي",
+            f"🔄 **تم تحديث إعدادات نظام الريسيت بنجاح تام!**\n"
+            f"• **نوع الريسيت المختار:** `{cfg['reset_type']}`\n"
+            f"• **روم الإعلانات:** <#{cfg['announcement_channel']}>" if cfg['announcement_channel'] else "• **روم الإعلانات:** الروم الحالي الافتراضي",
             ephemeral=True
         )
 
@@ -76,14 +84,14 @@ class AllowedRoleModal(discord.ui.Modal, title="🛡️ تحديد رتبة ال
         
         if val.lower() == "none":
             cfg["allowed_role_id"] = None
-            await interaction.response.send_message("🌐 **تم إلغاء قيد الرتبة؛** أصبح النظام يعمل لجميع أعضاء السيرفر!", ephemeral=True)
+            await interaction.response.send_message("🌐 **تم إلغاء قيد الرتبة؛** أصبح نظام التفاعل متاحاً لجميع أعضاء السيرفر!", ephemeral=True)
         elif val.isdigit():
             r_obj = interaction.guild.get_role(int(val))
             if r_obj:
                 cfg["allowed_role_id"] = r_obj.id
                 await interaction.response.send_message(f"🔒 **تم قيد النظام بنجاح!** التفاعل مخصص الآن لأصحاب رتبة {r_obj.mention}.", ephemeral=True)
             else:
-                await interaction.response.send_message("❌ لم يتم العثور على رتبة بهذا الأيدي!", ephemeral=True)
+                await interaction.response.send_message("❌ لم يتم العثور على رتبة بهذا الأيدي في السيرفر!", ephemeral=True)
         else:
             await interaction.response.send_message("❌ يرجى إدخال أيدي صحيح أو كتابة `none`.", ephemeral=True)
 
@@ -125,12 +133,12 @@ class AddRewardRoleModal(discord.ui.Modal, title="🎁 ربط رتبة مكاف�
 
         role_obj = interaction.guild.get_role(role_id)
         if not role_obj:
-            await interaction.response.send_message("❌ لم يتم العثور على رتبة بهذا الأيدي!", ephemeral=True)
+            await interaction.response.send_message("❌ لم يتم العثور على رتبة بهذا الأيدي في السيرفر!", ephemeral=True)
             return
 
         cfg = fetch_guild_config(interaction.guild.id)
         cfg["role_rewards"][str(level_num)] = role_obj.id
-        await interaction.response.send_message(f"🎁 تم ربط المستوى **`{level_num}`** بالرتبة المميزة {role_obj.mention} بنجاح!", ephemeral=True)
+        await interaction.response.send_message(f"🎁 تم ربط المستوى **`{level_num}`** بالرتبة المميزة {role_obj.mention} بنجاح تام!", ephemeral=True)
 
 class SetMultiplierModal(discord.ui.Modal, title="⚡ تحديد مضاعف النقاط (Multiplier)"):
     mult_box = discord.ui.TextInput(
@@ -160,7 +168,7 @@ class AdminPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="تشغيل/إيقاف", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="sys_tgl_v8")
+    @discord.ui.button(label="تشغيل/إيقاف", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="sys_tgl_v9")
     async def toggle_sys(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ عذراً، هذه الأزرار مخصصة للإدارة فقط!", ephemeral=True)
@@ -170,42 +178,42 @@ class AdminPanelView(discord.ui.View):
         state_str = "مفعّل 🟢" if cfg["status"] else "متوقف 🔴"
         await interaction.response.send_message(f"⚙️ أصبحت حالة النظام الآن: **{state_str}**", ephemeral=True)
 
-    @discord.ui.button(label="الريسيت والتوب", style=discord.ButtonStyle.primary, emoji="📅", row=0, custom_id="sys_reset_cfg_v8")
+    @discord.ui.button(label="الريسيت والتوب", style=discord.ButtonStyle.primary, emoji="📅", row=0, custom_id="sys_reset_cfg_v9")
     async def reset_config_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ عذراً، هذه الأزرار مخصصة للإدارة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(ResetConfigModal())
 
-    @discord.ui.button(label="إضافة رتبة مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=0, custom_id="sys_reward_v8")
+    @discord.ui.button(label="إضافة رتبة مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=0, custom_id="sys_reward_v9")
     async def add_reward(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ عذراً، هذه الأزرار مخصصة للإدارة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(AddRewardRoleModal())
 
-    @discord.ui.button(label="تحديد رتبة التفاعل", style=discord.ButtonStyle.secondary, emoji="🛡️", row=1, custom_id="sys_allowed_role_v8")
+    @discord.ui.button(label="تحديد رتبة التفاعل", style=discord.ButtonStyle.secondary, emoji="🛡️", row=1, custom_id="sys_allowed_role_v9")
     async def allowed_role_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ عذراً، هذه الأزرار مخصصة للإدارة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(AllowedRoleModal())
 
-    @discord.ui.button(label="تعديل رسالة الصعود", style=discord.ButtonStyle.secondary, emoji="💬", row=1, custom_id="sys_msg_v8")
+    @discord.ui.button(label="تعديل رسالة الصعود", style=discord.ButtonStyle.secondary, emoji="💬", row=1, custom_id="sys_msg_v9")
     async def edit_msg(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ عذراً، هذه الأزرار مخصصة للإدارة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(CustomMessageModal())
 
-    @discord.ui.button(label="ضبط المضاعف", style=discord.ButtonStyle.danger, emoji="⚡", row=1, custom_id="sys_mult_v8")
+    @discord.ui.button(label="ضبط المضاعف", style=discord.ButtonStyle.danger, emoji="⚡", row=1, custom_id="sys_mult_v9")
     async def set_mult(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ عذراً، هذه الأزرار مخصصة للإدارة فقط!", ephemeral=True)
             return
         await interaction.response.send_modal(SetMultiplierModal())
 
-    @discord.ui.button(label="إحصائيات السيرفر", style=discord.ButtonStyle.secondary, emoji="📊", row=2, custom_id="sys_stats_v8")
+    @discord.ui.button(label="إحصائيات السيرفر", style=discord.ButtonStyle.secondary, emoji="📊", row=2, custom_id="sys_stats_v9")
     async def server_stats_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         gid = interaction.guild.id
         users_data = SERVER_DATABASE["users"].get(gid, {})
@@ -219,7 +227,7 @@ class AdminPanelView(discord.ui.View):
                 f"• **عدد الأعضاء النشطين:** `{total_users}` عضو\n"
                 f"• **إجمالي الرسائل المحتسبة:** `{total_msgs}` رسالة\n"
                 f"• **مضاعف النقاط الحالي:** `{cfg['multiplier']}x`\n"
-                f"• **أوقات التسيير اليومية:**\n`{cfg['reset_type']}`"
+                f"• **نوع الريسيت النشط:** `{cfg['reset_type']}`"
             ),
             color=0x2B2D31,
             timestamp=datetime.datetime.utcnow()
@@ -254,7 +262,7 @@ class CardView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="تخصيص بطاقتي", style=discord.ButtonStyle.primary, emoji="🎨", custom_id="card_custom_v8")
+    @discord.ui.button(label="تخصيص بطاقتي", style=discord.ButtonStyle.primary, emoji="🎨", custom_id="card_custom_v9")
     async def custom_card(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(CardCustomModal())
 
@@ -289,14 +297,14 @@ class TopLeaderboardView(discord.ui.View):
 
         embed = discord.Embed(
             title="📋 Top global XP (الشات فقط)",
-            description="أبرز أعضاء السيرفر تفاعلاً في الشات:\n\n" + ("\n".join(lines) if lines else "لا توجد بيانات."),
+            description="أبرز أعضاء السيرفر تفاعلاً في الشات:\n\n" + ("\n".join(lines) if lines else "لا توجد بيانات مسجلة."),
             color=0x2B2D31,
             timestamp=datetime.datetime.utcnow()
         )
         embed.set_footer(text=f"Page {self.page + 1} of {self.max_pages}")
         return embed
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="◀", custom_id="top_prev_v8")
+    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="◀", custom_id="top_prev_v9")
     async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.page > 0:
             self.page -= 1
@@ -305,7 +313,7 @@ class TopLeaderboardView(discord.ui.View):
         else:
             await interaction.response.defer()
 
-    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="top_my_rank_v8")
+    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="top_my_rank_v9")
     async def my_rank_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = interaction.user.id
         found_idx = None
@@ -322,7 +330,7 @@ class TopLeaderboardView(discord.ui.View):
         else:
             await interaction.response.send_message("❌ ليس لديك أي تفاعل مسجل في لوحة الشرف حتى الآن!", ephemeral=True)
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="▶", custom_id="top_next_v8")
+    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="▶", custom_id="top_next_v9")
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.page < self.max_pages - 1:
             self.page += 1
@@ -393,7 +401,7 @@ class AdvancedLevelSystem(commands.Cog):
         uid = message.author.id
         cfg = fetch_guild_config(gid)
 
-        # دعم نظام الاختصارات السريعة (Prefix Shortcuts)
+        # نظام الاختصارات السريعة (Prefix Shortcuts)
         content = message.content.strip()
         if content.lower().startswith("l "):
             target_member = message.mentions[0] if message.mentions else message.author
@@ -488,7 +496,7 @@ class AdvancedLevelSystem(commands.Cog):
                 "مرحباً بك في لوحة الإدارة المركزية لنظام التفاعل والنشاط.\n"
                 "يمكنك التحكم بكافة الخصائص والإعدادات بسلاسة عبر الأزرار أدناه:\n\n"
                 f"• **حالة النظام العامة:** {status_str}\n"
-                f"• **أوقات التسيير والتوب:**\n`{cfg['reset_type']}` 📅\n"
+                f"• **نوع الريسيت المختار:** `{cfg['reset_type']}` 📅\n"
                 f"• **روم إعلانات الترقية:** {chan_disp}\n"
                 f"• **رتبة التفاعل المخصصة:** {allowed_role_disp}\n"
                 f"• **مضاعف النقاط النشط:** `{cfg['multiplier']}x` ⚡\n"
@@ -549,9 +557,8 @@ class AdvancedLevelSystem(commands.Cog):
 
         udata = SERVER_DATABASE["users"][gid][member.id]
         udata["level"] = max(0, level)
-        udata["xp"] = 0  # تثبيت الـ XP عند بداية المستوى الجديد
+        udata["xp"] = 0  # تثبيت الـ XP عند بداية المستوى
 
-        # فحص ومنح رتبة المكافأة تلقائياً إن وجدت لهذا المستوى
         role_rewards = cfg.get("role_rewards", {})
         assigned_role_id = role_rewards.get(str(udata["level"]))
         role_mention_str = "لا توجد رتبة مكافأة لهذا المستوى"
@@ -563,7 +570,7 @@ class AdvancedLevelSystem(commands.Cog):
                     await member.add_roles(r_target, reason=f"Admin SetLevel: Set to level {udata['level']}")
                     role_mention_str = r_target.mention
                 except:
-                    role_mention_str = "فشل منح الرتبة (تأكد من صلاحيات البوت)"
+                    role_mention_str = "فشل منح الرتبة (تأكد من صلاحيات البوت وتحريك رتبته للأعلى)"
 
         await interaction.response.send_message(
             f"🎯 **تم تحديث مستوى العضو بنجاح تام!**\n"
