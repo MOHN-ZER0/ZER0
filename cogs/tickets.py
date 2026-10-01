@@ -55,7 +55,6 @@ class TicketRatingView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         
-        # حفظ التقييم في إحصائيات المشرف المسؤول إن وجد
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
         t_info = db.get(guild_id_str, {}).get("active_tickets", {}).get(str(self.ticket_channel.id), {})
@@ -74,6 +73,17 @@ class TicketRatingView(discord.ui.View):
         await interaction.response.edit_message(content=f"❤ ╎ شكراً لتقييمك الرائع ({stars_str})! سيتم إزالة التذكرة وتطهير السجل خلال 3 ثوانٍ...", view=self)
         
         await asyncio.sleep(3)
+        
+        # حذف القناة الصوتية المرتبطة تلقائياً إن وجدت
+        voice_chan_id = t_info.get("temp_voice_id")
+        if voice_chan_id:
+            v_chan = interaction.guild.get_channel(int(voice_chan_id))
+            if v_chan:
+                try:
+                    await v_chan.delete()
+                except:
+                    pass
+
         try:
             await self.ticket_channel.delete()
         except:
@@ -81,7 +91,7 @@ class TicketRatingView(discord.ui.View):
 
 
 # ==============================================================================
-# 🔒 واجهة تأكيد الإغلاق (حذف أو فتح)
+# 🔒 واجهة تأكيد الإغلاق (حذف أو فتح) مع الحذف التلقائي للفويس
 # ==============================================================================
 class CloseConfirmationView(discord.ui.View):
     def __init__(self):
@@ -112,6 +122,16 @@ class CloseConfirmationView(discord.ui.View):
                 guild_data["closed_tickets_archive"] = []
             guild_data["closed_tickets_archive"].append(ticket_data)
             save_tickets_db(db)
+
+            # حذف القناة الصوتية المرتبطة تلقائياً فوراً مع حذف التذكرة
+            voice_chan_id = ticket_data.get("temp_voice_id")
+            if voice_chan_id:
+                v_chan = interaction.guild.get_channel(int(voice_chan_id))
+                if v_chan:
+                    try:
+                        await v_chan.delete()
+                    except:
+                        pass
 
             messages_history = []
             async for msg in channel.history(limit=500, oldest_first=True):
@@ -170,7 +190,7 @@ class QuickRepliesSelect(discord.ui.Select):
             discord.SelectOption(label="أهلاً بك، تفضل بطرح مشكلتك بالتفصيل.", emoji="👋", value="r1"),
             discord.SelectOption(label="يرجى الانتظار قليلاً جاري التحقق...", emoji="⏳", value="r2"),
             discord.SelectOption(label="تم حل المشكلة، هل تحتاج لأي مساعدة أخرى؟", emoji="✅", value="r3"),
-            discord.SelectOption(label="يرجى عدم الإشارة المتكررة لطاقم الإدارة.", emoji="⚠️", value="r4")
+            discord.SelectOption(label="يرجى عدم الإشارة المتكررة لطاقم الإدارة.", emoji="⚠️️", value="r4")
         ]
         super().__init__(placeholder="⚡ ╎ الردود السريعة المتاحة للمشرفين...", min_values=1, max_values=1, options=options)
 
@@ -187,11 +207,13 @@ class QuickRepliesSelect(discord.ui.Select):
 
 
 # ==============================================================================
-# 🎛️ واجهات تحكم التذاكر الداخلية (مع زر الفويس الصوتي المؤقت الفاخر)
+# 🎛️ واجهات تحكم التذاكر الداخلية (مع زر إعادة تعيين فئة التذكرة الداخلي الفاخر)
 # ==============================================================================
 class TicketInsideView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, guild_id: int, panel_name: str):
         super().__init__(timeout=None)
+        self.guild_id = guild_id
+        self.panel_name = panel_name
         self.add_item(QuickRepliesSelect())
 
     @discord.ui.button(label="استلام", style=discord.ButtonStyle.primary, emoji="💼", custom_id="claim_ticket_v7_btn", row=1)
@@ -223,7 +245,6 @@ class TicketInsideView(discord.ui.View):
         ticket_info["claimed_by"] = interaction.user.id
         ticket_info["last_activity"] = datetime.datetime.utcnow().timestamp()
         
-        # تحديث إحصائيات المشرف
         if "staff_stats" not in guild_data:
             guild_data["staff_stats"] = {}
         c_str = str(interaction.user.id)
@@ -261,7 +282,6 @@ class TicketInsideView(discord.ui.View):
             interaction.user: discord.PermissionOverwrite(connect=True, speak=True, view_channel=True)
         }
         
-        # إضافة صاحب التذكرة وفريق الدعم
         db = load_tickets_db()
         t_info = db.get(str(guild.id), {}).get("active_tickets", {}).get(str(interaction.channel.id), {})
         creator_id = t_info.get("user_id")
@@ -274,14 +294,45 @@ class TicketInsideView(discord.ui.View):
             if role:
                 overwrites[role] = discord.PermissionOverwrite(connect=True, speak=True, view_channel=True)
 
+        # استخراج رقم التذكرة الحالي من اسم الروم (مثال: 🎫・3 -> 3) ليظهر بالشكل المطلوب بالضبط
+        channel_name_parts = interaction.channel.name.split("・")
+        ticket_number_str = channel_name_parts[-1] if len(channel_name_parts) > 1 else "1"
+
         voice_chan = await guild.create_voice_channel(
-            name=f"🔊・voice-{interaction.channel.name}",
+            name=f"🎫・Voice・{ticket_number_str}",
             category=category,
             overwrites=overwrites
         )
+
+        # حفظ أيدي الفويس المؤقت في قاعدة البيانات لحذفه تلقائياً عند إغلاق التذكرة
+        t_info["temp_voice_id"] = str(voice_chan.id)
+        save_tickets_db(db)
+
         await interaction.response.send_message(f"🔊 ╎ تم إنشاء غرفة صوتية مؤقتة خاصة بهذه التذكرة بنجاح: {voice_chan.mention}", ephemeral=False)
 
-    @discord.ui.button(label="تنبيه ذكي", style=discord.ButtonStyle.secondary, emoji="🔔", custom_id="smart_ping_ticket_btn_v7", row=2)
+    @discord.ui.button(label="إعادة تعيين الفئة", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="reset_ticket_category_inside_btn", row=2)
+    async def reset_ticket_category_inside(self, interaction: discord.Interaction, button: discord.ui.Button):
+        db = load_tickets_db()
+        p_data = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {})
+        if not p_data:
+            await interaction.response.send_message("❌ ╎ هذا البانل المرتبط بالتذكرة لم يعد موجوداً.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title=p_data.get("title"),
+            description=p_data.get("desc") + "\n\n____________________________________________________________________\n✦ **اختر القسم المناسب لطلبك من القائمة أدناه:**",
+            color=0x2B2D31,
+            timestamp=datetime.datetime.utcnow()
+        )
+        if p_data.get("image_url"):
+            embed.set_image(url=p_data["image_url"])
+        embed.set_footer(text=f"Z I UO Community ✦ Panel: {self.panel_name}")
+
+        is_m = p_data.get("display_type", "menu") == "menu"
+        await interaction.channel.send(embed=embed, view=PanelControlView(interaction.guild.id, self.panel_name, is_m))
+        await interaction.response.send_message("🔄 ╎ تم إعادة تعيين فئة التذكرة وإرسال قائمة الخيارات الجديدة بنجاح داخل الروم!", ephemeral=True)
+
+    @discord.ui.button(label="تنبيه ذكي", style=discord.ButtonStyle.secondary, emoji="🔔", custom_id="smart_ping_ticket_btn_v7", row=3)
     async def smart_ping(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
@@ -305,7 +356,7 @@ class TicketInsideView(discord.ui.View):
             await interaction.channel.send(f"🔔 ╎ **تنبيه من إدارة السيرفر إلى {creator_mention}:** يرجى الرد على التذكرة لاستكمال الإجراءات.")
             await interaction.response.send_message("✅ ╎ تم تنبيه العضو بنجاح.", ephemeral=True)
 
-    @discord.ui.button(label="طلب مسؤول أعلى", style=discord.ButtonStyle.primary, emoji="👑", custom_id="escalate_ticket_btn", row=2)
+    @discord.ui.button(label="طلب مسؤول أعلى", style=discord.ButtonStyle.primary, emoji="👑", custom_id="escalate_ticket_btn", row=3)
     async def escalate_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
@@ -341,7 +392,7 @@ class AddMemberModal(discord.ui.Modal, title="➕ ╎ إضافة عضو إلى �
 
 
 # ==============================================================================
-# 📋 الأسئلة المخصصة وإنشاء التذاكر
+# 📋 الأسئلة المخصصة وإنشاء التذاكر (بنظام حقول منفصلة ومبسطة)
 # ==============================================================================
 class DynamicTicketSelect(discord.ui.Select):
     def __init__(self, guild_id: int, panel_name: str):
@@ -375,13 +426,14 @@ class DynamicTicketSelect(discord.ui.Select):
 
 class CustomQuestionModal(discord.ui.Modal):
     def __init__(self, panel_name: str, section_key: str, question_text: str):
-        super().__init__(title="📝 ╎ أسئلة القسم المخصصة")
+        super().__init__(title="📝 ╎ إجابة أسئلة القسم")
         self.panel_name = panel_name
         self.section_key = section_key
         
+        # عرض اسم السؤال المخصص بوضوح وخانة إدخال تحته مباشرة
         self.answer_box = discord.ui.TextInput(
-            label=question_text[:45],
-            placeholder="اكتب إجابتك هنا (بحد أقصى 1000 حرف)...",
+            label=f"السؤال: {question_text[:35]}",
+            placeholder="اكتب إجابتك هنا بشكل مفصل...",
             style=discord.TextStyle.paragraph,
             max_length=1000,
             required=True
@@ -412,7 +464,7 @@ class TicketReasonModal(discord.ui.Modal, title="🎫 ╎ تفاصيل طلب ا
         await create_user_ticket_execution(interaction, self.panel_name, self.section_key, reason_text)
 
 
-# 🎛️ واجهة البانل الأساسية مع زر إعادة تعيين فئة التذكرة
+# 🎛️ واجهة البانل الأساسية
 class PanelControlView(discord.ui.View):
     def __init__(self, guild_id: int, panel_name: str, is_menu: bool):
         super().__init__(timeout=None)
@@ -432,32 +484,6 @@ class PanelControlView(discord.ui.View):
                         await inter.response.send_modal(TicketReasonModal(p, k))
                 btn.callback = btn_cb
                 self.add_item(btn)
-
-        # زر إعادة تعيين فئة التذكرة تحت البانل
-        reset_btn = discord.ui.Button(label="إعادة تعيين فئة التذكرة", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id=f"reset_panel_cat_{panel_name}")
-        async def reset_cb(inter: discord.Interaction):
-            db = load_tickets_db()
-            p_data = db.get(str(inter.guild.id), {}).get("panels", {}).get(panel_name, {})
-            if not p_data:
-                await inter.response.send_message("❌ ╎ هذا البانل لم يعد موجوداً.", ephemeral=True)
-                return
-            
-            embed = discord.Embed(
-                title=p_data.get("title"),
-                description=p_data.get("desc") + "\n\n________________________________________________________________----\n✦ **اختر القسم المناسب لطلبك من القائمة أدناه:**",
-                color=0x2B2D31,
-                timestamp=datetime.datetime.utcnow()
-            )
-            if p_data.get("image_url"):
-                embed.set_image(url=p_data["image_url"])
-            embed.set_footer(text=f"Z I UO Community ✦ Panel: {panel_name}")
-
-            is_m = p_data.get("display_type", "menu") == "menu"
-            await inter.message.edit(embed=embed, view=PanelControlView(inter.guild.id, panel_name, is_m))
-            await inter.response.send_message("🔄 ╎ تم إعادة تعيين وتحديث فئات وقائمة التذكرة بنجاح تام!", ephemeral=True)
-
-        reset_btn.callback = reset_cb
-        self.add_item(reset_btn)
 
 
 async def create_user_ticket_execution(interaction: discord.Interaction, panel_name: str, section_key: str, input_text: str, is_custom_answer: bool = False):
@@ -553,7 +579,7 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
     sent_msg = await ticket_channel.send(
         content=f"🔔 ╎ تنبيه للطاقم: {interaction.user.mention} {staff_mentions}", 
         embed=embed, 
-        view=TicketInsideView()
+        view=TicketInsideView(guild.id, panel_name)
     )
     try:
         await sent_msg.pin()
@@ -564,7 +590,7 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
 
 
 # ==============================================================================
-# 🛠️ لوحة التحكم والإعدادات المركزية (مع لوحة الإحصائيات الفخمة)
+# 🛠️ لوحة التحكم والإعدادات المركزية
 # ==============================================================================
 class TicketSetupMainView(discord.ui.View):
     def __init__(self):
@@ -775,7 +801,6 @@ class SectionsConfigModal(discord.ui.Modal, title="📝 ╎ الأقسام ور�
         panel_data["temp_role_ids"] = role_ids
         save_tickets_db(db)
 
-        # السؤال عن وصف الفئات والخطوات الإضافية
         await interaction.response.send_message(
             "❓ ╎ هل تريد إضافة وصف مخصص لكل فئة من الفئات التي قمت بإنشائها؟",
             view=AskDescriptionChoiceView(self.panel_name),
@@ -795,7 +820,7 @@ class AskDescriptionChoiceView(discord.ui.View):
     @discord.ui.button(label="لا، تخطي هذه الخطوة", style=discord.ButtonStyle.secondary, emoji="⏭️")
     async def no_desc(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
-            "❓ ╎ هل تريد تعيين (أسئلة مخصصة) لكل فئة قبل فتح التذكرة (بحد أقصى 1000 حرف للإجابة)؟",
+            "❓ ╎ هل تريد تعيين (أسئلة مخصصة) لكل فئة قبل فتح التذكرة؟",
             view=AskCustomQuestionsChoiceView(self.panel_name, use_descriptions=False),
             ephemeral=True
         )
@@ -821,7 +846,7 @@ class SectionDescriptionsModal(discord.ui.Modal, title="✍️ ╎ وصف الف
         save_tickets_db(db)
 
         await interaction.response.send_message(
-            "❓ ╎ هل تريد تعيين (أسئلة مخصصة) لكل فئة قبل فتح التذكرة (بحد أقصى 1000 حرف للإجابة)؟",
+            "❓ ╎ هل تريد تعيين (أسئلة مخصصة) لكل فئة قبل فتح التذكرة؟",
             view=AskCustomQuestionsChoiceView(self.panel_name, use_descriptions=True),
             ephemeral=True
         )
@@ -839,8 +864,8 @@ class AskCustomQuestionsChoiceView(discord.ui.View):
 
     @discord.ui.button(label="لا، تخطي ونشر البانل", style=discord.ButtonStyle.secondary, emoji="🚀")
     async def no_questions(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = NextStepConfirmView(self.panel_name, self.use_descriptions, use_questions=False)
-        await interaction.response.send_message("📌 ╎ اضغط على زر **(التالي)** أدناه لإتمام ونشر البانل بالكامل:", view=view, ephemeral=True)
+        view = PublishTargetChoiceView(self.panel_name, self.use_descriptions, use_questions=False)
+        await interaction.response.send_message("📌 ╎ اختر مكان نشر البانل المطلوب:", view=view, ephemeral=True)
 
 
 class SectionCustomQuestionsModal(discord.ui.Modal, title="❓ ╎ تعيين الأسئلة المخصصة لكل قسم"):
@@ -849,7 +874,7 @@ class SectionCustomQuestionsModal(discord.ui.Modal, title="❓ ╎ تعيين ا
         self.panel_name = panel_name
         self.use_descriptions = use_descriptions
         self.questions_box = discord.ui.TextInput(
-            label="اكتب سؤال كل قسم (كل سؤال في سطر يقابل القسم)",
+            label="اكتب سؤال كل قسم (كل سؤال في سطر)",
             placeholder="ما هو عمرك وخبرتك؟\nما هو المنتج المطلوب ورابطه؟",
             style=discord.TextStyle.paragraph,
             max_length=1000,
@@ -863,23 +888,46 @@ class SectionCustomQuestionsModal(discord.ui.Modal, title="❓ ╎ تعيين ا
         db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_questions"] = questions
         save_tickets_db(db)
 
-        view = NextStepConfirmView(self.panel_name, self.use_descriptions, use_questions=True)
-        await interaction.response.send_message("📌 ╎ اضغط على زر **(التالي)** أدناه لإتمام ونشر البانل بالكامل في الروم:", view=view, ephemeral=True)
+        view = PublishTargetChoiceView(self.panel_name, self.use_descriptions, use_questions=True)
+        await interaction.response.send_message("📌 ╎ اختر مكان نشر البانل المطلوب:", view=view, ephemeral=True)
 
 
-class NextStepConfirmView(discord.ui.View):
+# ==============================================================================
+# 🚀 واجهة اختيار مكان النشر (نفس الروم الحالي أو روم محدد)
+# ==============================================================================
+class PublishTargetChoiceView(discord.ui.View):
     def __init__(self, panel_name: str, use_descriptions: bool, use_questions: bool):
         super().__init__(timeout=60)
         self.panel_name = panel_name
         self.use_descriptions = use_descriptions
         self.use_questions = use_questions
 
-    @discord.ui.button(label="التالي (إتمام النشر)", style=discord.ButtonStyle.success, emoji="➡️")
-    async def next_step(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await finalize_panel_setup(interaction, self.panel_name, self.use_descriptions, self.use_questions)
+    @discord.ui.button(label="نعم اريد ان انشر هنا", style=discord.ButtonStyle.success, emoji="📍")
+    async def publish_here(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await finalize_and_publish_panel(interaction, interaction.channel, self.panel_name, self.use_descriptions, self.use_questions)
+
+    @discord.ui.button(label="سوف انشر في روم محدد", style=discord.ButtonStyle.primary, emoji="🎯")
+    async def publish_in_specific_room(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = discord.ui.View(timeout=60)
+        select = discord.ui.Select(placeholder="اختر الروم المراد نشر البانل فيه...")
+        for ch in interaction.guild.text_channels:
+            if len(select.options) < 25:
+                select.add_option(label=ch.name, value=str(ch.id), emoji="#️⃣")
+
+        async def select_ch_cb(inter: discord.Interaction):
+            target_ch_id = int(select.values[0])
+            target_ch = inter.guild.get_channel(target_ch_id)
+            if not target_ch:
+                await inter.response.send_message("❌ ╎ الروم المحدد غير موجود!", ephemeral=True)
+                return
+            await finalize_and_publish_panel(inter, target_ch, self.panel_name, self.use_descriptions, self.use_questions)
+
+        select.callback = select_ch_cb
+        view.add_item(select)
+        await interaction.response.edit_message(content="🎯 ╎ اختر الروم المخصص من القائمة أدناه:", view=view)
 
 
-async def finalize_panel_setup(interaction: discord.Interaction, panel_name: str, use_descriptions: bool, use_questions: bool):
+async def finalize_and_publish_panel(interaction: discord.Interaction, target_channel: discord.TextChannel, panel_name: str, use_descriptions: bool, use_questions: bool):
     db = load_tickets_db()
     guild_id_str = str(interaction.guild.id)
     panel_data = db[guild_id_str]["panels"][panel_name]
@@ -910,7 +958,7 @@ async def finalize_panel_setup(interaction: discord.Interaction, panel_name: str
     
     embed = discord.Embed(
         title=panel_data.get("title"),
-        description=panel_data.get("desc") + "\n\n________________________________________________________________----\n✦ **اختر القسم المناسب لطلبك من القائمة أدناه:**",
+        description=panel_data.get("desc") + "\n\n____________________________________________________________________\n✦ **اختر القسم المناسب لطلبك من القائمة أدناه:**",
         color=0x2B2D31,
         timestamp=datetime.datetime.utcnow()
     )
@@ -922,12 +970,12 @@ async def finalize_panel_setup(interaction: discord.Interaction, panel_name: str
     is_menu = panel_data.get("display_type", "menu") == "menu"
     view = PanelControlView(guild_id, panel_name, is_menu)
 
+    await target_channel.send(embed=embed, view=view)
+    
     if interaction.response.is_done():
-        await interaction.followup.send(embed=embed, view=view)
-        await interaction.followup.send(f"🚀 ╎ **تم نشر بانل التذاكر ({panel_name}) بنجاح كامل بكل الأسئلة المخصصة والزرار الجديد!**", ephemeral=True)
+        await interaction.followup.send(f"🚀 ╎ **تم نشر بانل التذاكر ({panel_name}) بنجاح كامل في الروم {target_channel.mention}!**", ephemeral=True)
     else:
-        await interaction.response.send_message(embed=embed, view=view)
-        await interaction.followup.send(f"🚀 ╎ **تم نشر بانل التذاكر ({panel_name}) بنجاح كامل بكل الأسئلة المخصصة والزرار الجديد!**", ephemeral=True)
+        await interaction.response.send_message(f"🚀 ╎ **تم نشر بانل التذاكر ({panel_name}) بنجاح كامل في الروم {target_channel.mention}!**", ephemeral=True)
 
 
 class ZiuoUltimateTicketsCog(commands.Cog):
@@ -967,6 +1015,16 @@ class ZiuoUltimateTicketsCog(commands.Cog):
                             guild_data["closed_tickets_archive"].append(t_info)
                             save_tickets_db(db)
                             
+                            # حذف القناة الصوتية المرتبطة تلقائياً
+                            voice_chan_id = t_info.get("temp_voice_id")
+                            if voice_chan_id:
+                                v_chan = guild.get_channel(int(voice_chan_id))
+                                if v_chan:
+                                    try:
+                                        await v_chan.delete()
+                                    except:
+                                        pass
+
                             await asyncio.sleep(4)
                             await channel.delete()
                         except:
