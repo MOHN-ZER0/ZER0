@@ -217,7 +217,7 @@ class QuickRepliesSelect(discord.ui.Select):
 
 
 # ==============================================================================
-# 🎛️ واجهات تحكم التذاكر الداخلية (بدون زر إعادة التعيين)
+# 🎛️ واجهات تحكم التذاكر الداخلية
 # ==============================================================================
 class TicketInsideView(discord.ui.View):
     def __init__(self, guild_id: int, panel_name: str):
@@ -504,7 +504,6 @@ class PanelControlView(discord.ui.View):
                 btn.callback = btn_cb
                 self.add_item(btn)
 
-    # زر إعادة تعيين الفئة / البانل أصبح هنا تحت الأقسام في البانل الأساسي!
     @discord.ui.button(label="إعادة تعيين الفئة والبانل", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="reset_panel_main_btn_v7", row=4)
     async def reset_panel_main(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
@@ -526,7 +525,6 @@ class PanelControlView(discord.ui.View):
         is_m = p_data.get("display_type", "menu") == "menu"
         
         try:
-            # تحديث الرسالة الحالية مباشرة دون إرسال بانل جديد بالخطأ
             await interaction.message.edit(embed=embed, view=PanelControlView(interaction.guild.id, self.panel_name, is_m))
             await interaction.response.send_message("🔄 ╎ تم إعادة تعيين وتحديث بانل الأقسام بنجاح دون إرسال رسائل مكررة!", ephemeral=True)
         except Exception as e:
@@ -881,7 +879,6 @@ class AskDescriptionChoiceView(discord.ui.View):
 
     @discord.ui.button(label="نعم، أريد إضافة وصف", style=discord.ButtonStyle.success, emoji="✅")
     async def yes_desc(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # ديناميكي منفصل لكل قسم تم إنشاؤه مسبقاً
         db = load_tickets_db()
         sections = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
         await interaction.response.send_modal(DynamicSectionsDescriptionsModal(self.panel_name, sections))
@@ -895,16 +892,13 @@ class AskDescriptionChoiceView(discord.ui.View):
         )
 
 
-# ==============================================================================
-# ✍️ مودال الوصف المنفصل تماماً لكل قسم على حدة (بدون سطر واحد لخبطة)
-# ==============================================================================
 class DynamicSectionsDescriptionsModal(discord.ui.Modal):
     def __init__(self, panel_name: str, sections: list):
         super().__init__(title="✍️ ╎ وصف الفئات بشكل منفصل")
         self.panel_name = panel_name
         self.inputs_map = {}
 
-        for sec in sections[:5]:  # أقصى حد مسموح من حقول الإدخال في الديسكورد هو 5 حقول
+        for sec in sections[:5]:
             box = discord.ui.TextInput(
                 label=f"وصف قسم: {sec[:35]}",
                 placeholder=f"اكتب الوصف الخاص بـ ({sec}) هنا...",
@@ -949,9 +943,6 @@ class AskCustomQuestionsChoiceView(discord.ui.View):
         await interaction.response.send_message("📌 ╎ اختر مكان نشر البانل المطلوب:", view=view, ephemeral=True)
 
 
-# ==============================================================================
-# ❓ مودال الأسئلة المنفصل تماماً لكل قسم على حدة (القسم وتحته خانة السؤال الخاص به)
-# ==============================================================================
 class DynamicSectionsQuestionsModal(discord.ui.Modal):
     def __init__(self, panel_name: str, use_descriptions: bool, sections: list):
         super().__init__(title="❓ ╎ الأسئلة المخصصة لكل قسم")
