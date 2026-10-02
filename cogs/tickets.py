@@ -32,23 +32,23 @@ class TicketRatingView(discord.ui.View):
         self.ticket_channel = ticket_channel
         self.ticket_creator_id = ticket_creator_id
 
-    @discord.ui.button(label="⭐ 1", style=discord.ButtonStyle.danger, custom_id="rate_1")
+    @discord.ui.button(label="⭐ 1", style=discord.ButtonStyle.danger, custom_id="rate_1_v7")
     async def rate_1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rating_and_delete(interaction, 1)
 
-    @discord.ui.button(label="⭐⭐ 2", style=discord.ButtonStyle.danger, custom_id="rate_2")
+    @discord.ui.button(label="⭐⭐ 2", style=discord.ButtonStyle.danger, custom_id="rate_2_v7")
     async def rate_2(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rating_and_delete(interaction, 2)
 
-    @discord.ui.button(label="⭐⭐⭐ 3", style=discord.ButtonStyle.secondary, custom_id="rate_3")
+    @discord.ui.button(label="⭐⭐⭐ 3", style=discord.ButtonStyle.secondary, custom_id="rate_3_v7")
     async def rate_3(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rating_and_delete(interaction, 3)
 
-    @discord.ui.button(label="⭐⭐⭐⭐ 4", style=discord.ButtonStyle.success, custom_id="rate_4")
+    @discord.ui.button(label="⭐⭐⭐⭐ 4", style=discord.ButtonStyle.success, custom_id="rate_4_v7")
     async def rate_4(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rating_and_delete(interaction, 4)
 
-    @discord.ui.button(label="⭐⭐⭐⭐⭐ 5", style=discord.ButtonStyle.success, custom_id="rate_5")
+    @discord.ui.button(label="⭐⭐⭐⭐⭐ 5", style=discord.ButtonStyle.success, custom_id="rate_5_v7")
     async def rate_5(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rating_and_delete(interaction, 5)
 
@@ -106,7 +106,7 @@ class CloseConfirmationView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="حذف التذكرة", style=discord.ButtonStyle.danger, emoji="🗑️", custom_id="confirm_delete_ticket_btn")
+    @discord.ui.button(label="حذف التذكرة", style=discord.ButtonStyle.danger, emoji="🗑️", custom_id="confirm_delete_ticket_btn_v7")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.manage_channels and not interaction.user.guild_permissions.administrator:
             db = load_tickets_db()
@@ -122,8 +122,9 @@ class CloseConfirmationView(discord.ui.View):
         channel_id_str = str(channel.id)
         
         guild_data = db.get(guild_id_str, {})
-        if "active_tickets" in guild_data and channel_id_str in guild_data["active_tickets"]:
-            ticket_data = guild_data["active_tickets"].pop(channel_id_str)
+        ticket_data = guild_data.get("active_tickets", {}).pop(channel_id_str, None)
+        
+        if ticket_data:
             ticket_data["status"] = "مغلقة ومحذوفة"
             ticket_data["closed_by"] = interaction.user.id
             ticket_data["closed_at"] = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
@@ -181,13 +182,13 @@ class CloseConfirmationView(discord.ui.View):
                         pass
 
         try:
-            creator_id_val = ticket_data.get("user_id", interaction.user.id)
+            creator_id_val = ticket_data.get("user_id", interaction.user.id) if ticket_data else interaction.user.id
             embed_rate = discord.Embed(title="⭐ ╎ تقييم جودة الدعم", description=f"يرجى من صاحب التذكرة (<@{creator_id_val}>) تقييم الخدمة المقدمة من طاقم العمل عبر الأزرار أدناه:", color=0x2B2D31)
             await interaction.response.send_message(embed=embed_rate, view=TicketRatingView(channel, creator_id_val), ephemeral=False)
         except:
             pass
 
-    @discord.ui.button(label="فتح التذكرة", style=discord.ButtonStyle.success, emoji="🔓", custom_id="confirm_unlock_ticket_btn")
+    @discord.ui.button(label="فتح التذكرة", style=discord.ButtonStyle.success, emoji="🔓", custom_id="confirm_unlock_ticket_btn_v7")
     async def unlock_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.manage_channels:
             embed = discord.Embed(title="❌ ╎ خطأ", description="ليس لديك صلاحية فتح التذكرة!", color=0xFF3333)
@@ -214,7 +215,7 @@ class QuickRepliesSelect(discord.ui.Select):
             discord.SelectOption(label="تم حل المشكلة، هل تحتاج لمساعدة؟", emoji="✅", value="r3"),
             discord.SelectOption(label="يرجى عدم الإشارة المتكررة للإدارة.", emoji="⚠", value="r4")
         ]
-        super().__init__(placeholder="⚡ ╎ الردود السريعة المتاحة للمشرفين...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="⚡ ╎ الردود السريعة المتاحة للمشرفين...", min_values=1, max_values=1, options=options, custom_id="quick_replies_select_v7")
 
     async def callback(self, interaction: discord.Interaction):
         mapping = {
@@ -240,7 +241,7 @@ class ClaimConfirmView(discord.ui.View):
         self.old_claimer_id = old_claimer_id
         self.channel_id = channel_id
 
-    @discord.ui.button(label="موافقة وتبديل", style=discord.ButtonStyle.success, emoji="✅")
+    @discord.ui.button(label="موافقة وتبديل", style=discord.ButtonStyle.success, emoji="✅", custom_id="claim_approve_switch_v7")
     async def approve_switch(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.old_claimer_id and not interaction.user.guild_permissions.administrator:
             embed = discord.Embed(title="❌ ╎ خطأ", description="هذا الطلب مخصص للمشرف المستلم الحالي فقط للموافقة على التبديل!", color=0xFF3333)
@@ -265,7 +266,7 @@ class ClaimConfirmView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=None)
 
-    @discord.ui.button(label="رفض وحذف الطلب", style=discord.ButtonStyle.danger, emoji="❌")
+    @discord.ui.button(label="رفض وحذف الطلب", style=discord.ButtonStyle.danger, emoji="❌", custom_id="claim_deny_switch_v7")
     async def deny_switch(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.old_claimer_id and not interaction.user.guild_permissions.administrator:
             embed = discord.Embed(title="❌ ╎ خطأ", description="هذا الطلب مخصص للمشرف المستلم الحالي فقط!", color=0xFF3333)
@@ -320,7 +321,7 @@ class TicketInsideView(discord.ui.View):
                     super().__init__(timeout=30)
                     self.ch_id = ch_id
 
-                @discord.ui.button(label="نعم، إلغاء الاستلام", style=discord.ButtonStyle.danger, emoji="🔓")
+                @discord.ui.button(label="نعم، إلغاء الاستلام", style=discord.ButtonStyle.danger, emoji="🔓", custom_id="confirm_unclaim_v7")
                 async def confirm_unclaim(self, inter: discord.Interaction, btn: discord.ui.Button):
                     db_inner = load_tickets_db()
                     t_inf = db_inner.get(str(inter.guild.id), {}).get("active_tickets", {}).get(self.ch_id)
@@ -330,7 +331,7 @@ class TicketInsideView(discord.ui.View):
                     embed_res = discord.Embed(title="💼 ╎ تم إلغاء الاستلام", description=f"✦ قام {inter.user.mention} بإلغاء استلام التذكرة وأصبحت متاحة للجميع.", color=0xFF3333)
                     await inter.response.edit_message(embed=embed_res, view=None)
 
-                @discord.ui.button(label="تجاهل", style=discord.ButtonStyle.secondary, emoji="✖")
+                @discord.ui.button(label="تجاهل", style=discord.ButtonStyle.secondary, emoji="✖", custom_id="cancel_unclaim_v7")
                 async def cancel_unclaim(self, inter: discord.Interaction, btn: discord.ui.Button):
                     await inter.message.delete()
 
@@ -384,7 +385,7 @@ class TicketInsideView(discord.ui.View):
     async def add_member(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(AddMemberModal())
 
-    @discord.ui.button(label="إنشاء فويس مؤقت", style=discord.ButtonStyle.success, emoji="🔊", custom_id="create_temp_voice_btn", row=2)
+    @discord.ui.button(label="إنشاء فويس مؤقت", style=discord.ButtonStyle.success, emoji="🔊", custom_id="create_temp_voice_btn_v7", row=2)
     async def create_temp_voice(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild = interaction.guild
         category = interaction.channel.category
@@ -453,7 +454,7 @@ class TicketInsideView(discord.ui.View):
             embed_ok2 = discord.Embed(title="✅ ╎ تم الإرسال", description="تم تنبيه العضو بنجاح.", color=0x00FF88)
             await interaction.response.send_message(embed=embed_ok2, ephemeral=True)
 
-    @discord.ui.button(label="طلب مسؤول أعلى", style=discord.ButtonStyle.primary, emoji="👑", custom_id="escalate_ticket_btn", row=3)
+    @discord.ui.button(label="طلب مسؤول أعلى", style=discord.ButtonStyle.primary, emoji="👑", custom_id="escalate_ticket_btn_v7", row=3)
     async def escalate_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
@@ -816,7 +817,7 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
 
 
 # ==============================================================================
-# 🛠️ لوحة التحكم وإعدادات البانرات وتعديل البيانات القديمة (تم تصحيح جلب بيانات السيرفر)
+# 🛠️ لوحة التحكم وإعدادات البانرات وتعديل البيانات
 # ==============================================================================
 class TicketSetupMainView(discord.ui.View):
     def __init__(self):
@@ -836,13 +837,13 @@ class TicketSetupMainView(discord.ui.View):
             return
 
         view = discord.ui.View(timeout=60)
-        select = discord.ui.Select(placeholder="اختر البانل الذي تريد تعديله...")
+        select = discord.ui.Select(placeholder="اختر البانل الذي تريد تعديله...", custom_id="edit_panel_select_v7")
         for name in panels.keys():
             select.add_option(label=name, value=name)
 
         async def select_cb(inter: discord.Interaction):
             chosen = select.values[0]
-            await inter.response.send_message(embed=discord.Embed(title="⚙️ ╎ ما الذي تريد تعديله؟", description="اختر ما تريد تعديله في البانل:", color=0x2B2D31), view=EditPanelOptionsView(chosen), ephemeral=True)
+            await inter.response.send_message(embed=discord.Embed(title="⚙ ╎ ما الذي تريد تعديله؟", description="اختر ما تريد تعديله في البانل:", color=0x2B2D31), view=EditPanelOptionsView(chosen), ephemeral=True)
 
         select.callback = select_cb
         view.add_item(select)
@@ -860,7 +861,7 @@ class TicketSetupMainView(discord.ui.View):
             return
 
         view = discord.ui.View(timeout=60)
-        select = discord.ui.Select(placeholder="اختر البانل المراد حذفه...")
+        select = discord.ui.Select(placeholder="اختر البانل المراد حذفه...", custom_id="delete_panel_select_v7")
         for name in panels.keys():
             select.add_option(label=name, value=name)
 
@@ -873,14 +874,14 @@ class TicketSetupMainView(discord.ui.View):
 
         select.callback = del_cb
         view.add_item(select)
-        embed_del_sel = discord.Embed(title="🗑️ ╎ حذف البانل", description="اختر البانل المراد حذفه:", color=0x2B2D31)
+        embed_del_sel = discord.Embed(title="🗑 ╎ حذف البانل", description="اختر البانل المراد حذفه:", color=0x2B2D31)
         await interaction.response.send_message(embed=embed_del_sel, view=view, ephemeral=True)
 
     @discord.ui.button(label="تحديد روم اللوج", style=discord.ButtonStyle.secondary, emoji="📋", custom_id="setup_log_channel_btn_v7")
     async def set_log_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(LogChannelModal())
 
-    @discord.ui.button(label="إحصائيات المشرفين", style=discord.ButtonStyle.primary, emoji="📊", custom_id="setup_staff_stats_btn")
+    @discord.ui.button(label="إحصائيات المشرفين", style=discord.ButtonStyle.primary, emoji="📊", custom_id="setup_staff_stats_btn_v7")
     async def show_staff_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         guild_data = db.get(str(interaction.guild.id), {})
@@ -919,11 +920,11 @@ class EditPanelOptionsView(discord.ui.View):
         super().__init__(timeout=60)
         self.panel_name = panel_name
 
-    @discord.ui.button(label="تعديل معلومات البانل والوصوفات", style=discord.ButtonStyle.primary, emoji="✏️")
+    @discord.ui.button(label="تعديل معلومات البانل والوصوفات", style=discord.ButtonStyle.primary, emoji="✏️", custom_id="edit_panel_info_v7")
     async def edit_info(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(PanelInfoModal(interaction.guild.id, is_editing=True, panel_name=self.panel_name))
 
-    @discord.ui.button(label="تعديل الفئات والأقسام والأسئلة", style=discord.ButtonStyle.success, emoji="📝")
+    @discord.ui.button(label="تعديل الفئات والأقسام والأسئلة", style=discord.ButtonStyle.success, emoji="📝", custom_id="edit_panel_secs_v7")
     async def edit_sections(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         p_data = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {})
@@ -1024,14 +1025,14 @@ class PanelDisplayTypeView(discord.ui.View):
         super().__init__(timeout=60)
         self.panel_name = panel_name
 
-    @discord.ui.button(label="قائمة منسدلة", style=discord.ButtonStyle.primary, emoji="📂")
+    @discord.ui.button(label="قائمة منسدلة", style=discord.ButtonStyle.primary, emoji="📂", custom_id="disp_menu_v7")
     async def select_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         db[str(interaction.guild.id)]["panels"][self.panel_name]["display_type"] = "menu"
         save_tickets_db(db)
         await interaction.response.send_modal(SectionsConfigModal(self.panel_name))
 
-    @discord.ui.button(label="أزرار تفاعلية", style=discord.ButtonStyle.success, emoji="🔘")
+    @discord.ui.button(label="أزرار تفاعلية", style=discord.ButtonStyle.success, emoji="🔘", custom_id="disp_buttons_v7")
     async def select_buttons(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         db[str(interaction.guild.id)]["panels"][self.panel_name]["display_type"] = "buttons"
@@ -1044,11 +1045,6 @@ class SectionsConfigModal(discord.ui.Modal, title="📝 ╎ أسماء الفئ�
         super().__init__()
         self.panel_name = panel_name
         self.is_editing = is_editing
-
-        db = load_tickets_db()
-        # تم تصحيح الجلب هنا لكي لا يعتمد على application_id
-        sections = {}
-        # ملاحظة: سيتم تمرير البانل بناءً على البيانات المحفوظة عند الحاجة
 
         self.sections_box = discord.ui.TextInput(
             label="أسماء الفئات (كل فئة في سطر)",
@@ -1082,13 +1078,13 @@ class AskSupportRolesChoiceView(discord.ui.View):
         super().__init__(timeout=60)
         self.panel_name = panel_name
 
-    @discord.ui.button(label="نعم، إضافة رتب دعم", style=discord.ButtonStyle.success, emoji="✅")
+    @discord.ui.button(label="نعم، إضافة رتب دعم", style=discord.ButtonStyle.success, emoji="✅", custom_id="ask_support_yes_v7")
     async def yes_support(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         sections = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
         await interaction.response.send_modal(DynamicSectionsSupportRolesModal(self.panel_name, sections))
 
-    @discord.ui.button(label="لا، تخطي رتب الدعم", style=discord.ButtonStyle.secondary, emoji="⏭️")
+    @discord.ui.button(label="لا، تخطي رتب الدعم", style=discord.ButtonStyle.secondary, emoji="⏭️", custom_id="ask_support_no_v7")
     async def no_support(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
@@ -1144,13 +1140,13 @@ class AskDescriptionChoiceView(discord.ui.View):
         super().__init__(timeout=60)
         self.panel_name = panel_name
 
-    @discord.ui.button(label="نعم، أريد إضافة وصف", style=discord.ButtonStyle.success, emoji="✅")
+    @discord.ui.button(label="نعم، أريد إضافة وصف", style=discord.ButtonStyle.success, emoji="✅", custom_id="ask_desc_yes_v7")
     async def yes_desc(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         sections = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
         await interaction.response.send_modal(DynamicSectionsDescriptionsModal(self.panel_name, sections))
 
-    @discord.ui.button(label="لا، تخطي هذه الخطوة", style=discord.ButtonStyle.secondary, emoji="⏭️")
+    @discord.ui.button(label="لا، تخطي هذه الخطوة", style=discord.ButtonStyle.secondary, emoji="⏭️", custom_id="ask_desc_no_v7")
     async def no_desc(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(title="❓ ╎ أسئلة التذكرة", description="هل تريد تفعيل أسئلة مخصصة تظهر للعضو عند فتح التذكرة؟", color=0x2B2D31)
         await interaction.response.send_message(
@@ -1200,12 +1196,12 @@ class AskCustomQuestionsChoiceView(discord.ui.View):
         self.panel_name = panel_name
         self.use_descriptions = use_descriptions
 
-    @discord.ui.button(label="نعم، أريد تعيين أسئلة", style=discord.ButtonStyle.success, emoji="✅")
+    @discord.ui.button(label="نعم، أريد تعيين أسئلة", style=discord.ButtonStyle.success, emoji="✅", custom_id="ask_q_yes_v7")
     async def yes_questions(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(title="❓ ╎ نظام الأسئلة", description="اختر طريقة تعيين الأسئلة:", color=0x2B2D31)
         await interaction.response.send_message(embed=embed, view=QuestionModeChoiceView(self.panel_name, self.use_descriptions), ephemeral=True)
 
-    @discord.ui.button(label="لا، بدون أسئلة", style=discord.ButtonStyle.secondary, emoji="⏭️")
+    @discord.ui.button(label="لا، بدون أسئلة", style=discord.ButtonStyle.secondary, emoji="⏭", custom_id="ask_q_no_v7")
     async def no_questions(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(title="💬 ╎ الردود المخصصة", description="هل تريد تعيين ردود مخصصة لكل فئة عند فتح التذكرة؟", color=0x2B2D31)
         await interaction.response.send_message(
@@ -1221,13 +1217,13 @@ class QuestionModeChoiceView(discord.ui.View):
         self.panel_name = panel_name
         self.use_descriptions = use_descriptions
 
-    @discord.ui.button(label="سؤال واحد لكل فئة", style=discord.ButtonStyle.primary, emoji="📌")
+    @discord.ui.button(label="سؤال واحد لكل فئة", style=discord.ButtonStyle.primary, emoji="📌", custom_id="q_mode_single_v7")
     async def single_q(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         sections = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
         await interaction.response.send_modal(DynamicSectionsSingleQuestionModal(self.panel_name, self.use_descriptions, sections))
 
-    @discord.ui.button(label="تعيين أكثر من سؤال لكل فئة", style=discord.ButtonStyle.success, emoji="📋")
+    @discord.ui.button(label="تعيين أكثر من سؤال لكل فئة", style=discord.ButtonStyle.success, emoji="📋", custom_id="q_mode_multi_v7")
     async def multi_q(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         sections = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
@@ -1311,12 +1307,12 @@ class AskCustomResponsesChoiceView(discord.ui.View):
         self.use_descriptions = use_descriptions
         self.use_questions = use_questions
 
-    @discord.ui.button(label="نعم، أريد تعيين ردود مخصصة", style=discord.ButtonStyle.success, emoji="✅")
+    @discord.ui.button(label="نعم، أريد تعيين ردود مخصصة", style=discord.ButtonStyle.success, emoji="✅", custom_id="ask_resp_yes_v7")
     async def yes_responses(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(title="💬 ╎ نظام الردود المخصصة", description="اختر طريقة تعيين الردود:", color=0x2B2D31)
         await interaction.response.send_message(embed=embed, view=ResponseModeChoiceView(self.panel_name, self.use_descriptions, self.use_questions), ephemeral=True)
 
-    @discord.ui.button(label="لا، تخطي", style=discord.ButtonStyle.secondary, emoji="⏭️")
+    @discord.ui.button(label="لا، تخطي", style=discord.ButtonStyle.secondary, emoji="⏭️", custom_id="ask_resp_no_v7")
     async def no_responses(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(title="👑 ╎ رتبة الدعم العليا", description="هل تريد تعيين (رتبة دعم عليا) خاصة بالتذاكر؟", color=0x2B2D31)
         await interaction.response.send_message(
@@ -1333,11 +1329,11 @@ class ResponseModeChoiceView(discord.ui.View):
         self.use_descriptions = use_descriptions
         self.use_questions = use_questions
 
-    @discord.ui.button(label="رد للكل", style=discord.ButtonStyle.primary, emoji="🌐")
+    @discord.ui.button(label="رد للكل", style=discord.ButtonStyle.primary, emoji="🌐", custom_id="resp_mode_all_v7")
     async def reply_all(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(SingleResponseForAllModal(self.panel_name, self.use_descriptions, self.use_questions))
 
-    @discord.ui.button(label="تعيين مخصص لكل فئة", style=discord.ButtonStyle.success, emoji="🛠️")
+    @discord.ui.button(label="تعيين مخصص لكل فئة", style=discord.ButtonStyle.success, emoji="🛠️", custom_id="resp_mode_custom_v7")
     async def reply_custom(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         sections = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
@@ -1368,7 +1364,7 @@ class SingleResponseForAllModal(discord.ui.Modal, title="🌐 ╎ رد موحد 
 
 class CustomResponsesPerSectionModal(discord.ui.Modal):
     def __init__(self, panel_name: str, use_descriptions: bool, use_questions: bool, sections: list):
-        super().__init__(title="🛠️ ╎ ردود مخصصة لكل فئة")
+        super().__init__(title="🛠 ╎ ردود مخصصة لكل فئة")
         self.panel_name = panel_name
         self.use_descriptions = use_descriptions
         self.use_questions = use_questions
@@ -1410,7 +1406,7 @@ class AskHigherRoleChoiceView(discord.ui.View):
         self.use_questions = use_questions
         self.use_responses = use_responses
 
-    @discord.ui.button(label="نعم، أريد التعيين", style=discord.ButtonStyle.success, emoji="✅")
+    @discord.ui.button(label="نعم، أريد التعيين", style=discord.ButtonStyle.success, emoji="✅", custom_id="higher_yes_v7")
     async def yes_higher(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(title="👑 ╎ خيارات رتبة الدعم العليا", description="اختر طريقة تعيين رتبة الدعم العليا المناسبة لك:", color=0x2B2D31)
         await interaction.response.send_message(
@@ -1419,7 +1415,7 @@ class AskHigherRoleChoiceView(discord.ui.View):
             ephemeral=True
         )
 
-    @discord.ui.button(label="لا، تخطي", style=discord.ButtonStyle.secondary, emoji="⏭️")
+    @discord.ui.button(label="لا، تخطي", style=discord.ButtonStyle.secondary, emoji="⏭️", custom_id="higher_no_v7")
     async def no_higher(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = PublishTargetChoiceView(self.panel_name, self.use_descriptions, self.use_questions, self.use_responses, higher_mode="none")
         embed_pub = discord.Embed(title="📌 ╎ نشر البانل", description="اختر مكان نشر البانل المطلوب:", color=0x2B2D31)
@@ -1434,11 +1430,11 @@ class HigherRoleTypeChoiceView(discord.ui.View):
         self.use_questions = use_questions
         self.use_responses = use_responses
 
-    @discord.ui.button(label="رتبة واحدة للكل", style=discord.ButtonStyle.primary, emoji="⭐")
+    @discord.ui.button(label="رتبة واحدة للكل", style=discord.ButtonStyle.primary, emoji="⭐", custom_id="higher_type_single_v7")
     async def single_higher(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(SingleHigherRoleModal(self.panel_name, self.use_descriptions, self.use_questions, self.use_responses))
 
-    @discord.ui.button(label="تخصيص رتب لكل فئة", style=discord.ButtonStyle.success, emoji="🛠")
+    @discord.ui.button(label="تخصيص رتب لكل فئة", style=discord.ButtonStyle.success, emoji="🛠", custom_id="higher_type_custom_v7")
     async def custom_higher(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         sections = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
@@ -1473,7 +1469,7 @@ class SingleHigherRoleModal(discord.ui.Modal, title="⭐ ╎ رتبة دعم ع�
 
 class CustomHigherRolesModal(discord.ui.Modal):
     def __init__(self, panel_name: str, use_descriptions: bool, use_questions: bool, use_responses: bool, sections: list):
-        super().__init__(title="🛠️ ╎ رتب الدعم العليا لكل فئة")
+        super().__init__(title="🛠 ╎ رتب الدعم العليا لكل فئة")
         self.panel_name = panel_name
         self.use_descriptions = use_descriptions
         self.use_questions = use_questions
@@ -1515,14 +1511,14 @@ class PublishTargetChoiceView(discord.ui.View):
         self.use_responses = use_responses
         self.higher_mode = higher_mode
 
-    @discord.ui.button(label="نعم اريد ان انشر هنا", style=discord.ButtonStyle.success, emoji="📍")
+    @discord.ui.button(label="نعم اريد ان انشر هنا", style=discord.ButtonStyle.success, emoji="📍", custom_id="pub_here_v7")
     async def publish_here(self, interaction: discord.Interaction, button: discord.ui.Button):
         await finalize_and_publish_panel(interaction, interaction.channel, self.panel_name, self.use_descriptions, self.use_questions, self.use_responses, self.higher_mode)
 
-    @discord.ui.button(label="سوف انشر في روم محدد", style=discord.ButtonStyle.primary, emoji="🎯")
+    @discord.ui.button(label="سوف انشر في روم محدد", style=discord.ButtonStyle.primary, emoji="🎯", custom_id="pub_specific_v7")
     async def publish_in_specific_room(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = discord.ui.View(timeout=60)
-        select = discord.ui.Select(placeholder="اختر الروم المراد نشر البانل فيه...")
+        select = discord.ui.Select(placeholder="اختر الروم المراد نشر البانل فيه...", custom_id="pub_channel_select_v7")
         for ch in interaction.guild.text_channels:
             if len(select.options) < 25:
                 select.add_option(label=ch.name, value=str(ch.id), emoji="#️⃣")
@@ -1629,7 +1625,6 @@ class ZiuoUltimateTicketsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.auto_close_tickets_loop.start()
-        # إضافة Views دائمة للبوت عشان تفضل شغالين وما يعطلوش وقت الريستارت
         self.bot.add_view(CloseConfirmationView())
         self.bot.add_view(TicketSetupMainView())
 
