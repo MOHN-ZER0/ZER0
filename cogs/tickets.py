@@ -314,7 +314,7 @@ class TicketInsideView(discord.ui.View):
                     super().__init__(timeout=30)
                     self.ch_id = ch_id
 
-                @discord.ui.button(label="نعم، إلغاء الاستلام", style=discord.ButtonStyle.danger, emoji="هن")
+                @discord.ui.button(label="نعم، إلغاء الاستلام", style=discord.ButtonStyle.danger, emoji="🔓")
                 async def confirm_unclaim(self, inter: discord.Interaction, btn: discord.ui.Button):
                     db_inner = load_tickets_db()
                     t_inf = db_inner.get(str(inter.guild.id), {}).get("active_tickets", {}).get(self.ch_id)
@@ -433,16 +433,21 @@ class TicketInsideView(discord.ui.View):
         support_role_ids = ticket_info.get("support_role_ids", [])
         
         if interaction.user.id == creator_id:
+            # رسالة عادية وليست إمبد لتفعيل المنشن المباشر وبدون علامات `
             mentions = " ".join([f"<@&{r_id}>" for r_id in support_role_ids]) if support_role_ids else "فريق الدعم الفني"
-            embed_ping = discord.Embed(title="🔔 ╎ تنبيه جديد", description=f"تنبيه من صاحب التذكرة {interaction.user.mention} إلى {mentions}: يرجى الرد في أقرب وقت!", color=0xFFA500)
-            await interaction.channel.send(embed=embed_ping)
+            content_msg = f"🔔 ╎ **تنبيه جديد:** تنبيه من صاحب التذكرة {interaction.user.mention} إلى {mentions}: يرجى الرد في أقرب وقت!"
+            await interaction.channel.send(content=content_msg)
+            
             embed_ok = discord.Embed(title="✅ ╎ تم الإرسال", description="تم إرسال التنبيه لطاقم الدعم.", color=0x00FF88)
             await interaction.response.send_message(embed=embed_ok, ephemeral=True)
         else:
             creator_obj = interaction.guild.get_member(creator_id)
             creator_mention = creator_obj.mention if creator_obj else f"<@{creator_id}>"
-            embed_ping2 = discord.Embed(title="🔔 ╎ تنبيه إداري", description=f"تنبيه من الإدارة إلى العضو {creator_mention}: يرجى الرد على التذكرة لاستكمال الإجراءات.", color=0xFFA500)
-            await interaction.channel.send(embed=embed_ping2)
+            
+            # رسالة عادية وليست إمبد لتنبيه العضو
+            content_msg = f"🔔 ╎ **تنبيه إداري:** تنبيه من الإدارة إلى العضو {creator_mention}: يرجى الرد على التذكرة لاستكمال الإجراءات."
+            await interaction.channel.send(content=content_msg)
+            
             embed_ok2 = discord.Embed(title="✅ ╎ تم الإرسال", description="تم تنبيه العضو بنجاح.", color=0x00FF88)
             await interaction.response.send_message(embed=embed_ok2, ephemeral=True)
 
@@ -460,8 +465,10 @@ class TicketInsideView(discord.ui.View):
             support_role_ids = ticket_info.get("support_role_ids", [])
             mentions = " ".join([f"<@&{r_id}>" for r_id in support_role_ids]) if support_role_ids else "الإدارة العليا"
         
-        embed_esc = discord.Embed(title="👑 ╎ تصعيد عاجل", description=f"قام {interaction.user.mention} بطلب تدخل مسؤول أعلى أو الإدارة (`{mentions}`). يرجى التفقد الفوري!", color=0xFF3333)
-        await interaction.channel.send(embed=embed_esc)
+        # رسالة عادية وليست إمبد لطلب الإدارة العليا لتفعيل المنشن بدون علامات `
+        content_msg = f"👑 ╎ **تصعيد عاجل:** قام {interaction.user.mention} بطلب تدخل مسؤول أعلى أو الإدارة ({mentions}). يرجى التفقد الفوري!"
+        await interaction.channel.send(content=content_msg)
+        
         embed_done = discord.Embed(title="✅ ╎ تم التصعيد", description="تم إرسال طلب التصعيد للإدارة بنجاح.", color=0x00FF88)
         await interaction.response.send_message(embed=embed_done, ephemeral=True)
 
@@ -536,7 +543,7 @@ class DynamicTicketSelect(discord.ui.Select):
         sec_key = self.values[0]
         db = load_tickets_db()
         sec_data = db.get(str(self.guild_id), {}).get("panels", {}).get(self.panel_name, {}).get("sections", {}).get(sec_key, {})
-        custom_q = sec_data.get("custom_questions") # قائمة أسئلة القسم أو فارغة
+        custom_q = sec_data.get("custom_questions")
         
         panel_data = db.get(str(self.guild_id), {}).get("panels", {}).get(self.panel_name, {})
         has_questions = panel_data.get("has_questions", False)
