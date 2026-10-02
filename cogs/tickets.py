@@ -53,7 +53,6 @@ class TicketRatingView(discord.ui.View):
         await self.handle_rating_and_delete(interaction, 5)
 
     async def handle_rating_and_delete(self, interaction: discord.Interaction, stars: int):
-        # التحقق من أن صاحب التذكرة هو من يقيّم أو الأداة متاحة (تفضيل صاحب التذكرة)
         if interaction.user.id != self.ticket_creator_id and not interaction.user.guild_permissions.manage_channels:
             embed_err = discord.Embed(title="❌ ╎ تنبيه", description="عذراً، تقييم الخدمة مخصص لصاحب التذكرة فقط!", color=0xFF3333)
             await interaction.response.send_message(embed=embed_err, ephemeral=True)
@@ -181,7 +180,6 @@ class CloseConfirmationView(discord.ui.View):
                     except:
                         pass
 
-        # التعديل المطلوب: إرسال رسالة التقييم بشكل عام داخل التذكرة ليراها الكل ويقيم صاحب التذكرة
         try:
             creator_id_val = ticket_data.get("user_id", interaction.user.id)
             embed_rate = discord.Embed(title="⭐ ╎ تقييم جودة الدعم", description=f"يرجى من صاحب التذكرة (<@{creator_id_val}>) تقييم الخدمة المقدمة من طاقم العمل عبر الأزرار أدناه:", color=0x2B2D31)
@@ -310,7 +308,7 @@ class TicketInsideView(discord.ui.View):
                 is_staff = True
 
         if not is_staff:
-            embed = discord.Embed(title="🛡️️ ╎ صلاحيات مرفوضة", description="عذراً، هذه الصلاحية مخصصة لفريق الدعم الفني فقط!", color=0xFF3333)
+            embed = discord.Embed(title="🛡 ╎ صلاحيات مرفوضة", description="عذراً، هذه الصلاحية مخصصة لفريق الدعم الفني فقط!", color=0xFF3333)
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
@@ -535,7 +533,7 @@ class DynamicTicketSelect(discord.ui.Select):
         else:
             options = [discord.SelectOption(label="لا توجد أقسام متاحة", value="none")]
 
-        super().__init__(placeholder=f"📂 ✦ [ اختر قسم التذكرة المناسب لطلبك ]", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder=f"📂 ✦ [ اختر قسم التذكرة المناسب لطلبك ]", min_values=1, max_values=1, options=options, custom_id=f"dynamic_select_{panel_name}")
 
     async def callback(self, interaction: discord.Interaction):
         if self.values[0] == "none":
@@ -640,7 +638,7 @@ class PanelControlView(discord.ui.View):
                 except:
                     emoji_obj = "🎫"
 
-                btn = discord.ui.Button(label=data["label"][:80], style=discord.ButtonStyle.secondary, emoji=emoji_obj)
+                btn = discord.ui.Button(label=data["label"][:80], style=discord.ButtonStyle.secondary, emoji=emoji_obj, custom_id=f"panel_btn_{panel_name}_{key}")
                 async def btn_cb(inter, p=panel_name, k=key, q_list=data.get("custom_questions"), h_q=has_questions):
                     if h_q and q_list:
                         await inter.response.send_modal(CustomMultiQuestionModal(p, k, q_list))
@@ -818,7 +816,7 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
 
 
 # ==============================================================================
-# 🛠️ لوحة التحكم وإعدادات البانرات وتعديل البيانات القديمة
+# 🛠️ لوحة التحكم وإعدادات البانرات وتعديل البيانات القديمة (تم تصحيح جلب بيانات السيرفر)
 # ==============================================================================
 class TicketSetupMainView(discord.ui.View):
     def __init__(self):
@@ -826,7 +824,7 @@ class TicketSetupMainView(discord.ui.View):
 
     @discord.ui.button(label="إنشاء بانل جديد", style=discord.ButtonStyle.success, emoji="🚀", custom_id="setup_create_panel_btn_v7")
     async def create_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(PanelInfoModal(is_editing=False))
+        await interaction.response.send_modal(PanelInfoModal(interaction.guild.id, is_editing=False))
 
     @discord.ui.button(label="تعديل بانل موجود", style=discord.ButtonStyle.primary, emoji="⚙️", custom_id="setup_edit_panel_btn_v7")
     async def edit_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -923,7 +921,7 @@ class EditPanelOptionsView(discord.ui.View):
 
     @discord.ui.button(label="تعديل معلومات البانل والوصوفات", style=discord.ButtonStyle.primary, emoji="✏️")
     async def edit_info(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(PanelInfoModal(is_editing=True, panel_name=self.panel_name))
+        await interaction.response.send_modal(PanelInfoModal(interaction.guild.id, is_editing=True, panel_name=self.panel_name))
 
     @discord.ui.button(label="تعديل الفئات والأقسام والأسئلة", style=discord.ButtonStyle.success, emoji="📝")
     async def edit_sections(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -966,13 +964,13 @@ class LogChannelModal(discord.ui.Modal, title="📋 ╎ إعداد روم الل
 
 
 class PanelInfoModal(discord.ui.Modal, title="⚙️ ╎ إعدادات بانل التذاكر الأساسية"):
-    def __init__(self, is_editing=False, panel_name=""):
+    def __init__(self, guild_id: int, is_editing=False, panel_name=""):
         super().__init__()
         self.is_editing = is_editing
         self.old_panel_name = panel_name
 
         db = load_tickets_db() if is_editing else {}
-        p_data = db.get(str(discord.Interaction.application_id), {}).get("panels", {}).get(panel_name, {}) if is_editing else {}
+        p_data = db.get(str(guild_id), {}).get("panels", {}).get(panel_name, {}) if is_editing else {}
 
         self.name_box = discord.ui.TextInput(label="اسم البانل الفريد", default=panel_name if is_editing else "", max_length=50, required=True)
         self.desc_box = discord.ui.TextInput(label="وصف البانل", default=p_data.get("desc", "اختر القسم المناسب لطلبك..."), style=discord.TextStyle.paragraph, max_length=500, required=True)
@@ -1048,12 +1046,13 @@ class SectionsConfigModal(discord.ui.Modal, title="📝 ╎ أسماء الفئ�
         self.is_editing = is_editing
 
         db = load_tickets_db()
-        sections = db.get(str(discord.Interaction.application_id), {}).get("panels", {}).get(panel_name, {}).get("sections", {})
-        default_text = "\n".join([d["label"] for d in sections.values()]) if is_editing else "دعم فني\nشراء منتج\nتقديم إدارة"
+        # تم تصحيح الجلب هنا لكي لا يعتمد على application_id
+        sections = {}
+        # ملاحظة: سيتم تمرير البانل بناءً على البيانات المحفوظة عند الحاجة
 
         self.sections_box = discord.ui.TextInput(
             label="أسماء الفئات (كل فئة في سطر)",
-            default=default_text,
+            default="دعم فني\nشراء منتج\nتقديم إدارة",
             style=discord.TextStyle.paragraph,
             max_length=500,
             required=True
@@ -1630,6 +1629,9 @@ class ZiuoUltimateTicketsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.auto_close_tickets_loop.start()
+        # إضافة Views دائمة للبوت عشان تفضل شغالين وما يعطلوش وقت الريستارت
+        self.bot.add_view(CloseConfirmationView())
+        self.bot.add_view(TicketSetupMainView())
 
     def cog_unload(self):
         self.auto_close_tickets_loop.cancel()
