@@ -26,10 +26,16 @@ def save_ai_config(data):
 
 AI_SETTINGS = load_ai_config()
 
+# نظام حفظ السجل لكل قناة (يحتفظ بآخر عدد معين من الرسائل لكل قناة)
+CHANNEL_HISTORIES = {}
+MAX_HISTORY_LENGTH = 6  # عدد الرسائل السابقة عشان الذاكرة ما تتفجرش والردود تفضل سريعة ومختصرة
+
 EGYPTIAN_SYSTEM_PROMPT = """
-أنت بوت ذكاء اصطناعي داخل سيرفر ديسكورد مصري، اسمك "صاحب السيرفر"، جوك كوميدي، ساخر، ابن نكتة، وبتتكلم مصري صميم. 
-ولما الشخص بيكون محتاج منك مساعدة، أنت بتكلمه بكل جِدية وتفهم منه إيه المشكلة وتتكلم معاه بكل احترافية بدون مزح نهائياً. 
-وغير كده، أنت بتعرف تعمل قصف جبهات محترم جداً على أي شخص لو حد مثلاً قال لك انك غبي أو قلل منك؛ تقدر تعمل عليه قصف جبهة تخلي كرامته تنزل تحت الأرض.
+أنت بوت ذكاء اصطناعي داخل سيرفر ديسكورد مصري، اسمك "ZERO". 
+أسلوبك كوميدي، ساخر، ابن نكتة، وبتتكلم مصري صميم وخفيف. 
+قاعدة أساسية جداً: ردودك دايماً تكون **مختصرة جداً وقصيرة** (في سطرين أو ثلاثة بالكتير)، وبلاش رغ كتير أو محاضرات طويلة!
+لما الشخص يكون محتاج مساعدة حقيقية، رد عليه بجدية وتفهم مشكلته باختصار وبدون مزح.
+ولو حد قلل منك أو قال لك انك غبي، اديله قصف جبهة محترم وموجز يخليه يسكت.
 """
 
 class EgyptianAISystem(commands.Cog):
@@ -73,7 +79,8 @@ class EgyptianAISystem(commands.Cog):
             return
 
         guild_id = str(message.guild.id)
-        is_channel_enabled = (guild_id in AI_SETTINGS and message.channel.id in AI_SETTINGS[guild_id]["channels"])
+        channel_id = message.channel.id
+        is_channel_enabled = (guild_id in AI_SETTINGS and channel_id in AI_SETTINGS[guild_id]["channels"])
         is_bot_mentioned = self.bot.user.mentioned_in(message)
 
         # لو القناة مش مفعلة البوت مش هيرد إلا لو تم منشنته
@@ -85,6 +92,10 @@ class EgyptianAISystem(commands.Cog):
         if not user_message:
             return
 
+        # تجهيز السجل الخاص بالقناة
+        if channel_id not in CHANNEL_HISTORIES:
+            CHANNEL_HISTORIES[channel_id] = []
+
         async with message.channel.typing():
             try:
                 headers = {
@@ -92,11 +103,18 @@ class EgyptianAISystem(commands.Cog):
                     "Content-Type": "application/json"
                 }
                 
+                # بناء رسائل الـ API مع إضافة النظام والسجل التاريخي
+                messages_payload = [{"role": "system", "content": EGYPTIAN_SYSTEM_PROMPT}]
+                
+                # إضافة المحادثات السابقة للذاكرة
+                for hist in CHANNEL_HISTORIES[channel_id]:
+                    messages_payload.append(hist)
+                
+                # إضافة الرسالة الحالية
+                messages_payload.append({"role": "user", "content": user_message})
+
                 payload = {
-                    "messages": [
-                        {"role": "system", "content": EGYPTIAN_SYSTEM_PROMPT},
-                        {"role": "user", "content": user_message}
-                    ],
+                    "messages": messages_payload,
                     "model": "openai",
                     "jsonMode": False
                 }
@@ -104,7 +122,7 @@ class EgyptianAISystem(commands.Cog):
                 # طلب مباشر لـ Pollinations API
                 response = requests.post("https://text.pollinations.ai/", headers=headers, json=payload, timeout=30)
                 
-                print(f"API Status Code: {response.status_code}") # لتتبع الأخطاء في الكونسول
+                print(f"API Status Code: {response.status_code}") 
                 print(f"API Response: {response.text}")
 
                 if response.status_code == 200:
@@ -117,6 +135,14 @@ class EgyptianAISystem(commands.Cog):
                 if len(reply_text) > 1990:
                     reply_text = reply_text[:1987] + "..."
 
+                # حفظ الرسالة والرد في سجل القناة (الذاكرة)
+                CHANNEL_HISTORIES[channel_id].append({"role": "user", "content": user_message})
+                CHANNEL_HISTORIES[channel_id].append({"role": "assistant", "content": reply_text})
+
+                # الحفاظ على حجم السجل لكي لا يصبح كبيراً جداً
+                if len(CHANNEL_HISTORIES[channel_id]) > MAX_HISTORY_LENGTH * 2:
+                    CHANNEL_HISTORIES[channel_id] = CHANNEL_HISTORIES[channel_id][-MAX_HISTORY_LENGTH * 2:]
+
                 await message.reply(reply_text)
 
             except Exception as e:
@@ -124,5 +150,4 @@ class EgyptianAISystem(commands.Cog):
                 await message.reply(f"⚠ يا اسطى حصل خطأ في الاتصال:\n`{e}`")
 
 async def setup(bot):
-    await bot.add_cog(EgyptianAISystem(bot))
-
+    await bot.add_package(EgyptianAISystem(bot)) if hasattr(bot, 'add_package') else await bot.add_cog(EgyptianAISystem(bot))
