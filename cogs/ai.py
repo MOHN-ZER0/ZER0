@@ -6,9 +6,9 @@ import json
 import requests
 
 # ==============================================================================
-# ⚙ إعدادات Pollinations API
+# ⚙ إعدادات Pollinations API (المفتاح الجديد)
 # ==============================================================================
-POLLINATIONS_API_KEY = "sk_anMHgjpb65le6nbBBRoYTaDjb38VBKLN"
+POLLINATIONS_API_KEY = "AQ.Ab8RN6JtjAuJTMsXBlTfbmv1PMR6ywzgrmVoJl2PYgZFvllmlQ"
 CONFIG_FILE = "ai_system_config.json"
 
 def load_ai_config():
@@ -26,16 +26,16 @@ def save_ai_config(data):
 
 AI_SETTINGS = load_ai_config()
 
-# نظام حفظ السجل لكل قناة (يحتفظ بآخر عدد معين من الرسائل لكل قناة)
+# نظام حفظ السجل لكل قناة (الذاكرة المؤقتة)
 CHANNEL_HISTORIES = {}
-MAX_HISTORY_LENGTH = 6  # عدد الرسائل السابقة عشان الذاكرة ما تتفجرش والردود تفضل سريعة ومختصرة
+MAX_HISTORY_LENGTH = 5  # عدد الرسائل السابقة عشان الذاكرة تكون خفيفة والردود سريعة
 
 EGYPTIAN_SYSTEM_PROMPT = """
 أنت بوت ذكاء اصطناعي داخل سيرفر ديسكورد مصري، اسمك "ZERO". 
 أسلوبك كوميدي، ساخر، ابن نكتة، وبتتكلم مصري صميم وخفيف. 
-قاعدة أساسية جداً: ردودك دايماً تكون **مختصرة جداً وقصيرة** (في سطرين أو ثلاثة بالكتير)، وبلاش رغ كتير أو محاضرات طويلة!
-لما الشخص يكون محتاج مساعدة حقيقية، رد عليه بجدية وتفهم مشكلته باختصار وبدون مزح.
-ولو حد قلل منك أو قال لك انك غبي، اديله قصف جبهة محترم وموجز يخليه يسكت.
+قاعدة صارمة جداً: ردودك لازم تكون **مختصرة جداً وقصيرة** (في سطر أو سطرين بالكتير)، وبلاش رغ أو محاضرات طويلة نهائياً!
+لو حد محتاج مساعدة حقيقية، رد عليه بجدية وتفهم مشكلته باختصار شديد.
+ولو حد قلل منك أو استفزك، اديله قصف جبهة محترم وموجز.
 """
 
 class EgyptianAISystem(commands.Cog):
@@ -106,11 +106,9 @@ class EgyptianAISystem(commands.Cog):
                 # بناء رسائل الـ API مع إضافة النظام والسجل التاريخي
                 messages_payload = [{"role": "system", "content": EGYPTIAN_SYSTEM_PROMPT}]
                 
-                # إضافة المحادثات السابقة للذاكرة
                 for hist in CHANNEL_HISTORIES[channel_id]:
                     messages_payload.append(hist)
                 
-                # إضافة الرسالة الحالية
                 messages_payload.append({"role": "user", "content": user_message})
 
                 payload = {
@@ -119,8 +117,8 @@ class EgyptianAISystem(commands.Cog):
                     "jsonMode": False
                 }
 
-                # طلب مباشر لـ Pollinations API
-                response = requests.post("https://text.pollinations.ai/", headers=headers, json=payload, timeout=30)
+                # طلب مباشر لـ Pollinations API مع وقت إضافي لتجنب الـ Timeout
+                response = requests.post("https://text.pollinations.ai/", headers=headers, json=payload, timeout=20)
                 
                 print(f"API Status Code: {response.status_code}") 
                 print(f"API Response: {response.text}")
@@ -128,9 +126,11 @@ class EgyptianAISystem(commands.Cog):
                 if response.status_code == 200:
                     reply_text = response.text.strip()
                     if not reply_text:
-                        reply_text = "يا اسطى البعت ده رد بصمت.. مفيش كلام رجع!"
+                        reply_text = "يا اسطى البوت رد بصمت.. مفيش كلام رجع!"
+                elif response.status_code == 402:
+                    reply_text = "يا اسطى مفتاح الـ API محتاج رصيد أو خلص الحصة بتاعتـه!"
                 else:
-                    reply_text = f"يا اسطى السيرفر رد عليّ بكود خطأ: {response.status_code}"
+                    reply_text = "يا اسطى السيرفر بيشرب شاي، جرب تاني كمان شوية!"
 
                 if len(reply_text) > 1990:
                     reply_text = reply_text[:1987] + "..."
@@ -145,9 +145,12 @@ class EgyptianAISystem(commands.Cog):
 
                 await message.reply(reply_text)
 
+            except requests.exceptions.Timeout:
+                print("❌ Pollinations Timeout Error")
+                await message.reply("⚠ يا اسطى السيرفر أخد وقت أطول من اللازم ورد متأخر، حاول تاني.")
             except Exception as e:
                 print(f"❌ Pollinations Error: {e}")
-                await message.reply(f"⚠ يا اسطى حصل خطأ في الاتصال:\n`{e}`")
+                await message.reply("⚠ حصل خطأ خفيف في الاتصال، ظبط حالك وجرب تاني.")
 
 async def setup(bot):
-    await bot.add_package(EgyptianAISystem(bot)) if hasattr(bot, 'add_package') else await bot.add_cog(EgyptianAISystem(bot))
+    await bot.add_cog(EgyptianAISystem(bot))
