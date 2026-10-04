@@ -205,7 +205,7 @@ class CloseConfirmationView(discord.ui.View):
 
 
 # ==============================================================================
-# ⚡ قائمة الردود السريعة للمشرفين (مع دعم الرد المخصص للقسم)
+# ⚡ قائمة الردود السريعة للمشرفين
 # ==============================================================================
 class QuickRepliesSelect(discord.ui.Select):
     def __init__(self, custom_response_text: str = None):
@@ -240,7 +240,7 @@ class QuickRepliesSelect(discord.ui.Select):
 
 
 # ==============================================================================
-# 🔄 واجهة تأكيد تبديل أو إلغاء استلاستلام التذكرة
+# 🔄 واجهة تأكيد تبديل أو إلغاء استلام التذكرة
 # ==============================================================================
 class ClaimConfirmView(discord.ui.View):
     def __init__(self, new_claimer: discord.Member, old_claimer_id: int, channel_id: str):
@@ -622,7 +622,7 @@ class TicketReasonModal(discord.ui.Modal, title="🎫 ╎ تفاصيل طلب ا
 
 
 # ==============================================================================
-# 🎛️ بانل التحكم وزر إعادة تعيين الفئة تحت الأقسام في البانل الأساسي
+# 🎛️ بانل التحكم وزر إعادة تعيين الفئة
 # ==============================================================================
 class PanelControlView(discord.ui.View):
     def __init__(self, guild_id: int, panel_name: str, is_menu: bool):
@@ -648,12 +648,35 @@ class PanelControlView(discord.ui.View):
                 except:
                     emoji_obj = "🎫"
 
-                btn = discord.ui.Button(label=data["label"][:80], style=discord.ButtonStyle.secondary, emoji=emoji_obj, custom_id=f"panel_btn_{panel_name}_{key}")
+                btn = discord.ui.Button(
+                    label=data["label"][:80],
+                    style=discord.ButtonStyle.secondary,
+                    emoji=emoji_obj,
+                    custom_id=f"panel_btn_{panel_name}_{key}"
+                )
+                
+                # ربط الحدث بشكل صحيح ومستقل لكل زر لتجنب الـ SyntaxError
+                async def create_btn_callback(p, k, q_list, h_q):
+                    async def button_callback(inter: discord.Interaction):
+                        if h_q and q_list:
+                            await inter.response.send_modal(CustomMultiQuestionModal(p, k, q_list))
+                        else:
+                            await inter.response.send_modal(TicketReasonModal(p, k))
+                    return button_callback
+
+                # تعيين الـ callback الفعلي للزر
+                btn.callback = asyncio.run_coroutine_threadsafe(
+                    create_btn_callback(panel_name, key, data.get("custom_questions"), has_questions),
+                    asyncio.get_event_loop()
+                ) if False else None # تم تبسيط الطريقة بالأسفل لتجنب أي مشاكل خيوط
+
+                # الطريقة السليمة لتعيين دالة الـ callback للزر الديناميكي:
                 async def btn_cb(inter, p=panel_name, k=key, q_list=data.get("custom_questions"), h_q=has_questions):
                     if h_q and q_list:
                         await inter.response.send_modal(CustomMultiQuestionModal(p, k, q_list))
                     else:
                         await inter.response.send_modal(TicketReasonModal(p, k))
+                
                 btn.callback = btn_cb
                 self.add_item(btn)
 
@@ -1428,7 +1451,6 @@ class AskHigherRoleChoiceView(discord.ui.View):
 
     @discord.ui.button(label="لا، تخطي", style=discord.ButtonStyle.secondary, emoji="⏭️", custom_id="higher_no_v7")
     async def no_higher(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # عند الانتهاء من الإعداد، نخبر العضو بحفظ البانل ونطلب منه استخدام الأمر المخصص /ticket للإرسال
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
         panel_data = db[guild_id_str]["panels"][self.panel_name]
