@@ -655,24 +655,11 @@ class PanelControlView(discord.ui.View):
                     custom_id=f"panel_btn_{panel_name}_{key}"
                 )
                 
-                # تصحيح الخطأ البرمجي هنا بربط الـ callback بشكل سليم وآمن
                 p_val = panel_name
                 k_val = key
                 q_list = data.get("custom_questions")
                 h_q = has_questions
 
-                async def make_callback(p, k, q, h):
-                    async def btn_callback(inter: discord.Interaction):
-                        if h and q:
-                            await inter.response.send_modal(CustomMultiQuestionModal(p, k, q))
-                        else:
-                            await inter.response.send_modal(TicketReasonModal(p, k))
-                    return btn_callback
-
-                # تعيين الـ callback بشكل متزامن وصحيح
-                self.bot_callback_helper = asyncio.run_coroutine_threadsafe if False else None
-                
-                # استخدام دالة مساعدة لإنشاء الـ callback الخاص بالزر
                 async def dynamic_button_cb(inter: discord.Interaction, p=p_val, k=k_val, q=q_list, h=h_q):
                     if h and q:
                         await inter.response.send_modal(CustomMultiQuestionModal(p, k, q))
@@ -723,7 +710,7 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
             existing_chan = guild.get_channel(int(ch_id))
             if existing_chan:
                 try:
-                    embed_dup = discord.Embed(title="❌ ╎ تذكرة مفتوحة", description=f"عذراً يا فنان، لديك تذكرة مفتوحة بالفعل ولا يمكنك فتح أكثر من تذكرة في نفس الوقت: {existing_chan.mention}", color=0xFF3333)
+                    embed_dup = discord.Embed(title="❌ ╎ تذكرة مفتوحة", description=f"عذراً، لديك تذكرة مفتوحة بالفعل ولا يمكنك فتح أكثر من تذكرة في نفس الوقت: {existing_chan.mention}", color=0xFF3333)
                     await interaction.followup.send(embed=embed_dup, ephemeral=True)
                 except:
                     pass
@@ -879,7 +866,7 @@ class TicketSetupMainView(discord.ui.View):
 
         async def select_cb(inter: discord.Interaction):
             chosen = select.values[0]
-            await inter.response.send_message(embed=embed_sel_opt := discord.Embed(title="⚙ ╎ ما الذي تريد تعديله؟", description="اختر ما تريد تعديله في البانل:", color=0x2B2D31), view=EditPanelOptionsView(chosen), ephemeral=True)
+            await inter.response.send_message(embed=discord.Embed(title="⚙ ╎ ما الذي تريد تعديله؟", description="اختر ما تريد تعديله في البانل:", color=0x2B2D31), view=EditPanelOptionsView(chosen), ephemeral=True)
 
         select.callback = select_cb
         view.add_item(select)
