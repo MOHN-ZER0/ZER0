@@ -205,20 +205,28 @@ class CloseConfirmationView(discord.ui.View):
 
 
 # ==============================================================================
-# ⚡ قائمة الردود السريعة للمشرفين
+# ⚡ قائمة الردود السريعة للمشرفين (مع دعم الرد المخصص للقسم)
 # ==============================================================================
 class QuickRepliesSelect(discord.ui.Select):
-    def __init__(self):
-        options = [
+    def __init__(self, custom_response_text: str = None):
+        options = []
+        if custom_response_text:
+            options.append(discord.SelectOption(label=custom_response_text[:95], emoji="📌", value="custom_resp"))
+        
+        default_options = [
             discord.SelectOption(label="أهلاً بك، تفضل بطرح مشكلتك.", emoji="👋", value="r1"),
             discord.SelectOption(label="يرجى الانتظار قليلاً جاري التحقق...", emoji="⏳", value="r2"),
             discord.SelectOption(label="تم حل المشكلة، هل تحتاج لمساعدة؟", emoji="✅", value="r3"),
             discord.SelectOption(label="يرجى عدم الإشارة المتكررة للإدارة.", emoji="⚠", value="r4")
         ]
-        super().__init__(placeholder="⚡ ╎ الردود السريعة المتاحة للمشرفين...", min_values=1, max_values=1, options=options, custom_id="quick_replies_select_v7")
+        options.extend(default_options)
+
+        super().__init__(placeholder="⚡ ╎ الردود السريعة / الرد المخصص للمشرفين...", min_values=1, max_values=1, options=options, custom_id="quick_replies_select_v7")
+        self.custom_response_text = custom_response_text
 
     async def callback(self, interaction: discord.Interaction):
         mapping = {
+            "custom_resp": self.custom_response_text or "مرحباً بك.",
             "r1": "👋 ╎ أهلاً بك، تفضل بطرح مشكلتك بالتفصيل وسيقوم فريق الدعم بمساعدتك فوراً.",
             "r2": "⏳ ╎ يرجى الانتظار قليلاً جاري فحص المشكلة والتحقق منها.",
             "r3": "✅ ╎ تم حل المشكلة بنجاح، هل تحتاج لأي مساعدة إضافية قبل إغلاق التذكرة؟",
@@ -232,7 +240,7 @@ class QuickRepliesSelect(discord.ui.Select):
 
 
 # ==============================================================================
-# 🔄 واجهة تأكيد تبديل أو إلغاء استلام التذكرة
+# 🔄 واجهة تأكيد تبديل أو إلغاء استلاستلام التذكرة
 # ==============================================================================
 class ClaimConfirmView(discord.ui.View):
     def __init__(self, new_claimer: discord.Member, old_claimer_id: int, channel_id: str):
@@ -280,11 +288,12 @@ class ClaimConfirmView(discord.ui.View):
 # 🎛️ واجهات تحكم التذاكر الداخلية
 # ==============================================================================
 class TicketInsideView(discord.ui.View):
-    def __init__(self, guild_id: int, panel_name: str):
+    def __init__(self, guild_id: int, panel_name: str, custom_response_text: str = None):
         super().__init__(timeout=None)
         self.guild_id = guild_id
         self.panel_name = panel_name
-        self.add_item(QuickRepliesSelect())
+        self.custom_response_text = custom_response_text
+        self.add_item(QuickRepliesSelect(custom_response_text))
 
     @discord.ui.button(label="استلام", style=discord.ButtonStyle.primary, emoji="💼", custom_id="claim_ticket_v7_btn", row=1)
     async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -799,11 +808,13 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
         
     embed.set_footer(text=f"{guild.name} ✦ Ticket ID: {ticket_channel.id}")
 
+    custom_resp_val = section_data.get("custom_response")
+
     try:
         sent_msg = await ticket_channel.send(
             content=f"🔔 ╎ تنبيه للطاقم: {interaction.user.mention} {staff_mentions}", 
             embed=embed, 
-            view=TicketInsideView(guild.id, panel_name)
+            view=TicketInsideView(guild.id, panel_name, custom_resp_val)
         )
         await sent_msg.pin()
     except:
@@ -817,7 +828,7 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
 
 
 # ==============================================================================
-# 🛠️ لوحة التحكم وإعدادات البانرات وتعديل البيانات
+# 🛠️️ لوحة التحكم وإعدادات البانرات وتعديل البيانات
 # ==============================================================================
 class TicketSetupMainView(discord.ui.View):
     def __init__(self):
@@ -843,7 +854,7 @@ class TicketSetupMainView(discord.ui.View):
 
         async def select_cb(inter: discord.Interaction):
             chosen = select.values[0]
-            await inter.response.send_message(embed=discord.Embed(title="⚙ ╎ ما الذي تريد تعديله؟", description="اختر ما تريد تعديله في البانل:", color=0x2B2D31), view=EditPanelOptionsView(chosen), ephemeral=True)
+            await inter.response.send_message(embed=embed_sel_opt := discord.Embed(title="⚙ ╎ ما الذي تريد تعديله؟", description="اختر ما تريد تعديله في البانل:", color=0x2B2D31), view=EditPanelOptionsView(chosen), ephemeral=True)
 
         select.callback = select_cb
         view.add_item(select)
