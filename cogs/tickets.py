@@ -828,7 +828,7 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
 
 
 # ==============================================================================
-# 🛠️️ لوحة التحكم وإعدادات البانرات وتعديل البيانات
+# 🛠 لوحة التحكم وإعدادات البانرات وتعديل البيانات
 # ==============================================================================
 class TicketSetupMainView(discord.ui.View):
     def __init__(self):
@@ -1428,9 +1428,48 @@ class AskHigherRoleChoiceView(discord.ui.View):
 
     @discord.ui.button(label="لا، تخطي", style=discord.ButtonStyle.secondary, emoji="⏭️", custom_id="higher_no_v7")
     async def no_higher(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = PublishTargetChoiceView(self.panel_name, self.use_descriptions, self.use_questions, self.use_responses, higher_mode="none")
-        embed_pub = discord.Embed(title="📌 ╎ نشر البانل", description="اختر مكان نشر البانل المطلوب:", color=0x2B2D31)
-        await interaction.response.send_message(embed=embed_pub, view=view, ephemeral=True)
+        # عند الانتهاء من الإعداد، نخبر العضو بحفظ البانل ونطلب منه استخدام الأمر المخصص /ticket للإرسال
+        db = load_tickets_db()
+        guild_id_str = str(interaction.guild.id)
+        panel_data = db[guild_id_str]["panels"][self.panel_name]
+
+        sections_lines = panel_data.pop("temp_sections", [])
+        roles_map = panel_data.pop("temp_roles_map", {})
+        descs_list = panel_data.pop("temp_descs", []) if self.use_descriptions else []
+        questions_map = panel_data.pop("temp_questions_map", {}) if self.use_questions else {}
+        single_resp = panel_data.pop("temp_single_response", None) if self.use_responses else None
+        responses_map = panel_data.pop("temp_responses_map", {}) if self.use_responses else {}
+        
+        panel_data["has_questions"] = self.use_questions
+        panel_data["sections"] = {}
+
+        for idx, sec_name in enumerate(sections_lines):
+            key = f"sec_{idx}_{int(datetime.datetime.utcnow().timestamp())}"
+            sec_desc = descs_list[idx] if self.use_descriptions and idx < len(descs_list) else f"قسم خاص بـ {sec_name}"
+            sec_roles = roles_map.get(sec_name, [])
+            sec_questions = questions_map.get(sec_name, []) if self.use_questions else []
+            sec_resp = single_resp if single_resp else responses_map.get(sec_name)
+
+            panel_data["sections"][key] = {
+                "label": sec_name,
+                "description": sec_desc,
+                "custom_questions": sec_questions,
+                "custom_response": sec_resp,
+                "emoji": "🎫",
+                "support_role_ids": sec_roles,
+                "higher_support_role_id": None,
+                "color_hex": panel_data.get("color_hex", "2b2d31"),
+                "image_url": panel_data.get("image_url")
+            }
+
+        save_tickets_db(db)
+
+        embed_done = discord.Embed(
+            title="✅ ╎ تم حفظ البانل بنجاح",
+            description=f"تم حفظ بانل التذاكر (**{self.panel_name}**) بنجاح تام!\n\nاستخدم الأمر المخصص **`/ticket`** في أي روم ترغب بها لإرسال البانل واختياره بكل سهولة.",
+            color=0x00FF88
+        )
+        await interaction.response.send_message(embed=embed_done, ephemeral=True)
 
 
 class HigherRoleTypeChoiceView(discord.ui.View):
@@ -1470,12 +1509,46 @@ class SingleHigherRoleModal(discord.ui.Modal, title="⭐ ╎ رتبة دعم ع�
             return
 
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_single_higher"] = int(r_text)
+        guild_id_str = str(interaction.guild.id)
+        panel_data = db[guild_id_str]["panels"][self.panel_name]
+
+        sections_lines = panel_data.pop("temp_sections", [])
+        roles_map = panel_data.pop("temp_roles_map", {})
+        descs_list = panel_data.pop("temp_descs", []) if self.use_descriptions else []
+        questions_map = panel_data.pop("temp_questions_map", {}) if self.use_questions else {}
+        single_resp = panel_data.pop("temp_single_response", None) if self.use_responses else None
+        responses_map = panel_data.pop("temp_responses_map", {}) if self.use_responses else {}
+        
+        panel_data["has_questions"] = self.use_questions
+        panel_data["sections"] = {}
+
+        for idx, sec_name in enumerate(sections_lines):
+            key = f"sec_{idx}_{int(datetime.datetime.utcnow().timestamp())}"
+            sec_desc = descs_list[idx] if self.use_descriptions and idx < len(descs_list) else f"قسم خاص بـ {sec_name}"
+            sec_roles = roles_map.get(sec_name, [])
+            sec_questions = questions_map.get(sec_name, []) if self.use_questions else []
+            sec_resp = single_resp if single_resp else responses_map.get(sec_name)
+
+            panel_data["sections"][key] = {
+                "label": sec_name,
+                "description": sec_desc,
+                "custom_questions": sec_questions,
+                "custom_response": sec_resp,
+                "emoji": "🎫",
+                "support_role_ids": sec_roles,
+                "higher_support_role_id": int(r_text),
+                "color_hex": panel_data.get("color_hex", "2b2d31"),
+                "image_url": panel_data.get("image_url")
+            }
+
         save_tickets_db(db)
 
-        view = PublishTargetChoiceView(self.panel_name, self.use_descriptions, self.use_questions, self.use_responses, higher_mode="single")
-        embed_pub = discord.Embed(title="📌 ╎ نشر البانل", description="اختر مكان نشر البانل المطلوب:", color=0x2B2D31)
-        await interaction.response.send_message(embed=embed_pub, view=view, ephemeral=True)
+        embed_done = discord.Embed(
+            title="✅ ╎ تم حفظ البانل بنجاح",
+            description=f"تم حفظ بانل التذاكر (**{self.panel_name}**) بنجاح تام!\n\nاستخدم الأمر المخصص **`/ticket`** في أي روم ترغب بها لإرسال البانل واختياره بكل سهولة.",
+            color=0x00FF88
+        )
+        await interaction.response.send_message(embed=embed_done, ephemeral=True)
 
 
 class CustomHigherRolesModal(discord.ui.Modal):
@@ -1505,131 +1578,97 @@ class CustomHigherRolesModal(discord.ui.Modal):
                 map_higher[sec] = int(val)
 
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_map_higher"] = map_higher
+        guild_id_str = str(interaction.guild.id)
+        panel_data = db[guild_id_str]["panels"][self.panel_name]
+
+        sections_lines = panel_data.pop("temp_sections", [])
+        roles_map = panel_data.pop("temp_roles_map", {})
+        descs_list = panel_data.pop("temp_descs", []) if self.use_descriptions else []
+        questions_map = panel_data.pop("temp_questions_map", {}) if self.use_questions else {}
+        single_resp = panel_data.pop("temp_single_response", None) if self.use_responses else None
+        responses_map = panel_data.pop("temp_responses_map", {}) if self.use_responses else {}
+        
+        panel_data["has_questions"] = self.use_questions
+        panel_data["sections"] = {}
+
+        for idx, sec_name in enumerate(sections_lines):
+            key = f"sec_{idx}_{int(datetime.datetime.utcnow().timestamp())}"
+            sec_desc = descs_list[idx] if self.use_descriptions and idx < len(descs_list) else f"قسم خاص بـ {sec_name}"
+            sec_roles = roles_map.get(sec_name, [])
+            sec_questions = questions_map.get(sec_name, []) if self.use_questions else []
+            sec_resp = single_resp if single_resp else responses_map.get(sec_name)
+
+            panel_data["sections"][key] = {
+                "label": sec_name,
+                "description": sec_desc,
+                "custom_questions": sec_questions,
+                "custom_response": sec_resp,
+                "emoji": "🎫",
+                "support_role_ids": sec_roles,
+                "higher_support_role_id": map_higher.get(sec_name),
+                "color_hex": panel_data.get("color_hex", "2b2d31"),
+                "image_url": panel_data.get("image_url")
+            }
+
         save_tickets_db(db)
 
-        view = PublishTargetChoiceView(self.panel_name, self.use_descriptions, self.use_questions, self.use_responses, higher_mode="custom")
-        embed_pub = discord.Embed(title="📌 ╎ نشر البانل", description="اختر مكان نشر البانل المطلوب:", color=0x2B2D31)
-        await interaction.response.send_message(embed=embed_pub, view=view, ephemeral=True)
+        embed_done = discord.Embed(
+            title="✅ ╎ تم حفظ البانل بنجاح",
+            description=f"تم حفظ بانل التذاكر (**{self.panel_name}**) بنجاح تام!\n\nاستخدم الأمر المخصص **`/ticket`** في أي روم ترغب بها لإرسال البانل واختياره بكل سهولة.",
+            color=0x00FF88
+        )
+        await interaction.response.send_message(embed=embed_done, ephemeral=True)
 
 
-class PublishTargetChoiceView(discord.ui.View):
-    def __init__(self, panel_name: str, use_descriptions: bool, use_questions: bool, use_responses: bool, higher_mode: str):
+# ==============================================================================
+# 🎯 قائمة اختيار البانل لإرساله عبر أمر /ticket
+# ==============================================================================
+class TicketPublishSelectView(discord.ui.View):
+    def __init__(self, guild_id: int):
         super().__init__(timeout=60)
-        self.panel_name = panel_name
-        self.use_descriptions = use_descriptions
-        self.use_questions = use_questions
-        self.use_responses = use_responses
-        self.higher_mode = higher_mode
-
-    @discord.ui.button(label="نعم اريد ان انشر هنا", style=discord.ButtonStyle.success, emoji="📍", custom_id="pub_here_v7")
-    async def publish_here(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await finalize_and_publish_panel(interaction, interaction.channel, self.panel_name, self.use_descriptions, self.use_questions, self.use_responses, self.higher_mode)
-
-    @discord.ui.button(label="سوف انشر في روم محدد", style=discord.ButtonStyle.primary, emoji="🎯", custom_id="pub_specific_v7")
-    async def publish_in_specific_room(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = discord.ui.View(timeout=60)
-        select = discord.ui.Select(placeholder="اختر الروم المراد نشر البانل فيه...", custom_id="pub_channel_select_v7")
-        for ch in interaction.guild.text_channels:
-            if len(select.options) < 25:
-                select.add_option(label=ch.name, value=str(ch.id), emoji="#️⃣")
-
-        async def select_ch_cb(inter: discord.Interaction):
-            target_ch_id = int(select.values[0])
-            target_ch = inter.guild.get_channel(target_ch_id)
-            if not target_ch:
-                embed_err = discord.Embed(title="❌ ╎ خطأ", description="الروم المحدد غير موجود!", color=0xFF3333)
-                await inter.response.send_message(embed=embed_err, ephemeral=True)
-                return
-            await finalize_and_publish_panel(inter, target_ch, self.panel_name, self.use_descriptions, self.use_questions, self.use_responses, self.higher_mode)
-
-        select.callback = select_ch_cb
-        view.add_item(select)
-        embed_sel = discord.Embed(title="🎯 ╎ اختيار روم النشر", description="اختر الروم المخصص من القائمة أدناه:", color=0x2B2D31)
-        await interaction.response.edit_message(embed=embed_sel, view=view)
-
-
-async def finalize_and_publish_panel(interaction: discord.Interaction, target_channel: discord.TextChannel, panel_name: str, use_descriptions: bool, use_questions: bool, use_responses: bool, higher_mode: str):
-    db = load_tickets_db()
-    guild_id_str = str(interaction.guild.id)
-    panel_data = db[guild_id_str]["panels"][panel_name]
-
-    sections_lines = panel_data.pop("temp_sections", [])
-    roles_map = panel_data.pop("temp_roles_map", {})
-    descs_list = panel_data.pop("temp_descs", []) if use_descriptions else []
-    
-    questions_map = panel_data.pop("temp_questions_map", {}) if use_questions else {}
-    
-    single_resp = panel_data.pop("temp_single_response", None) if use_responses else None
-    responses_map = panel_data.pop("temp_responses_map", {}) if use_responses else {}
-    
-    single_higher = panel_data.pop("temp_single_higher", None)
-    map_higher = panel_data.pop("temp_map_higher", {})
-    
-    panel_data["has_questions"] = use_questions
-    panel_data["sections"] = {}
-
-    for idx, sec_name in enumerate(sections_lines):
-        key = f"sec_{idx}_{int(datetime.datetime.utcnow().timestamp())}"
-        sec_desc = descs_list[idx] if use_descriptions and idx < len(descs_list) else f"قسم خاص بـ {sec_name}"
-        sec_roles = roles_map.get(sec_name, [])
+        db = load_tickets_db()
+        panels = db.get(str(guild_id), {}).get("panels", {})
         
-        sec_questions = questions_map.get(sec_name, []) if use_questions else []
-        
-        sec_resp = None
-        if use_responses:
-            if single_resp:
-                sec_resp = single_resp
-            else:
-                sec_resp = responses_map.get(sec_name)
-
-        sec_higher = None
-        if higher_mode == "single":
-            sec_higher = single_higher
-        elif higher_mode == "custom":
-            sec_higher = map_higher.get(sec_name)
-
-        panel_data["sections"][key] = {
-            "label": sec_name,
-            "description": sec_desc,
-            "custom_questions": sec_questions,
-            "custom_response": sec_resp,
-            "emoji": "🎫",
-            "support_role_ids": sec_roles,
-            "higher_support_role_id": sec_higher,
-            "color_hex": panel_data.get("color_hex", "2b2d31"),
-            "image_url": panel_data.get("image_url")
-        }
-
-    save_tickets_db(db)
-    
-    embed = discord.Embed(
-        title=panel_data.get("title"),
-        description=panel_data.get("desc") + "\n\n____________________________________________________________________\n✦ **اختر القسم المناسب لطلبك من القائمة أدناه:**",
-        color=0x2B2D31,
-        timestamp=datetime.datetime.utcnow()
-    )
-    if panel_data.get("image_url"):
-        embed.set_image(url=panel_data["image_url"])
-    embed.set_footer(text=f"{interaction.guild.name} ✦ Panel: {panel_name}")
-
-    guild_id = interaction.guild.id
-    is_menu = panel_data.get("display_type", "menu") == "menu"
-    view = PanelControlView(guild_id, panel_name, is_menu)
-
-    try:
-        await target_channel.send(embed=embed, view=view)
-    except:
-        pass
-    
-    embed_done = discord.Embed(title="🚀 ╎ تم نشر البانل", description=f"تم نشر بانل التذاكر ({panel_name}) بنجاح كامل في الروم {target_channel.mention}!", color=0x00FF88)
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(embed=embed_done, ephemeral=True)
+        select = discord.ui.Select(placeholder="اختر البانل الذي ترغب بإرساله هنا...", custom_id="select_panel_to_publish_v7")
+        if panels:
+            for p_name in panels.keys():
+                select.add_option(label=p_name, description=f"بانل تذاكر: {p_name}", emoji="🎫", value=p_name)
         else:
-            await interaction.response.send_message(embed=embed_done, ephemeral=True)
-    except:
-        pass
+            select.add_option(label="لا توجد بانلات محفوظة", value="none")
+
+        async def select_callback(interaction: discord.Interaction):
+            chosen = select.values[0]
+            if chosen == "none":
+                await interaction.response.send_message("❌ ╎ لا توجد بانلات متاح إرسالها حالياً.", ephemeral=True)
+                return
+
+            db_inner = load_tickets_db()
+            p_data = db_inner.get(str(interaction.guild.id), {}).get("panels", {}).get(chosen, {})
+            if not p_data:
+                await interaction.response.send_message("❌ ╎ هذا البانل لم يعد موجوداً.", ephemeral=True)
+                return
+
+            embed = discord.Embed(
+                title=p_data.get("title"),
+                description=p_data.get("desc") + "\n\n____________________________________________________________________\n✦ **اختر القسم المناسب لطلبك من القائمة أدناه:**",
+                color=0x2B2D31,
+                timestamp=datetime.datetime.utcnow()
+            )
+            if p_data.get("image_url"):
+                embed.set_image(url=p_data["image_url"])
+            embed.set_footer(text=f"{interaction.guild.name} ✦ Panel: {chosen}")
+
+            is_m = p_data.get("display_type", "menu") == "menu"
+            view = PanelControlView(interaction.guild.id, chosen, is_m)
+
+            try:
+                await interaction.channel.send(embed=embed, view=view)
+                await interaction.response.edit_message(content=f"✅ ╎ تم إرسال البانل **{chosen}** بنجاح في هذه الروم!", embed=None, view=None)
+            except Exception as e:
+                await interaction.response.send_message(f"❌ ╎ حدث خطأ أثناء إرسال البانل: {e}", ephemeral=True)
+
+        select.callback = select_callback
+        self.add_item(select)
 
 
 class ZiuoUltimateTicketsCog(commands.Cog):
@@ -1704,6 +1743,23 @@ class ZiuoUltimateTicketsCog(commands.Cog):
         )
         embed.set_footer(text=f"{interaction.guild.name} Tickets Core ✦ 2026")
         await interaction.response.send_message(embed=embed, view=TicketSetupMainView(), ephemeral=False)
+
+    @app_commands.command(name="ticket", description="[الإدارة] إرسال بانل التذاكر المحفوظ في الروم الحالي")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def ticket_send_command(self, interaction: discord.Interaction):
+        db = load_tickets_db()
+        panels = db.get(str(interaction.guild.id), {}).get("panels", {})
+        if not panels:
+            embed_err = discord.Embed(title="⚠ ╎ تنبيه", description="لا توجد أي بانلات تذاكر محفوظة حالياً لتتمكن من إرسالها.", color=0xFFA500)
+            await interaction.response.send_message(embed=embed_err, ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🎫 ╎ إرسال بانل التذاكر",
+            description="اختر البانل الذي ترغب بإرساله في هذه الروم من القائمة أدناه:",
+            color=0x2B2D31
+        )
+        await interaction.response.send_message(embed=embed, view=TicketPublishSelectView(interaction.guild.id), ephemeral=True)
 
 
 async def setup(bot):
