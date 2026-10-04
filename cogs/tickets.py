@@ -655,29 +655,31 @@ class PanelControlView(discord.ui.View):
                     custom_id=f"panel_btn_{panel_name}_{key}"
                 )
                 
-                # ربط الحدث بشكل صحيح ومستقل لكل زر لتجنب الـ SyntaxError
-                async def create_btn_callback(p, k, q_list, h_q):
-                    async def button_callback(inter: discord.Interaction):
-                        if h_q and q_list:
-                            await inter.response.send_modal(CustomMultiQuestionModal(p, k, q_list))
+                # تصحيح الخطأ البرمجي هنا بربط الـ callback بشكل سليم وآمن
+                p_val = panel_name
+                k_val = key
+                q_list = data.get("custom_questions")
+                h_q = has_questions
+
+                async def make_callback(p, k, q, h):
+                    async def btn_callback(inter: discord.Interaction):
+                        if h and q:
+                            await inter.response.send_modal(CustomMultiQuestionModal(p, k, q))
                         else:
                             await inter.response.send_modal(TicketReasonModal(p, k))
-                    return button_callback
+                    return btn_callback
 
-                # تعيين الـ callback الفعلي للزر
-                btn.callback = asyncio.run_coroutine_threadsafe(
-                    create_btn_callback(panel_name, key, data.get("custom_questions"), has_questions),
-                    asyncio.get_event_loop()
-                ) if False else None # تم تبسيط الطريقة بالأسفل لتجنب أي مشاكل خيوط
-
-                # الطريقة السليمة لتعيين دالة الـ callback للزر الديناميكي:
-                async def btn_cb(inter, p=panel_name, k=key, q_list=data.get("custom_questions"), h_q=has_questions):
-                    if h_q and q_list:
-                        await inter.response.send_modal(CustomMultiQuestionModal(p, k, q_list))
+                # تعيين الـ callback بشكل متزامن وصحيح
+                self.bot_callback_helper = asyncio.run_coroutine_threadsafe if False else None
+                
+                # استخدام دالة مساعدة لإنشاء الـ callback الخاص بالزر
+                async def dynamic_button_cb(inter: discord.Interaction, p=p_val, k=k_val, q=q_list, h=h_q):
+                    if h and q:
+                        await inter.response.send_modal(CustomMultiQuestionModal(p, k, q))
                     else:
                         await inter.response.send_modal(TicketReasonModal(p, k))
-                
-                btn.callback = btn_cb
+
+                btn.callback = dynamic_button_cb
                 self.add_item(btn)
 
     @discord.ui.button(label="إعادة تعيين الفئة والبانل", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="reset_panel_main_btn_v7", row=4)
