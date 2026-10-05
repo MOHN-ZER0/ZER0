@@ -795,7 +795,6 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
             pass
         return
 
-    # استخدام فئة القسم إن وجدت، أو العودة للفئة العامة للبانل
     section_cat_id = section_data.get("category_id")
     category_id_str = section_cat_id if section_cat_id else panel_data.get("category_id")
     category = guild.get_channel(int(category_id_str)) if category_id_str and category_id_str.isdigit() else None
@@ -885,7 +884,6 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
 
     embed.set_footer(text=footer_combined, icon_url=guild.icon.url if guild.icon else None)
 
-    # دعم صورة التذكرة المصغرة (Thumbnail) المخصصة لكل قسم أو العامة للبانل
     sec_thumb = section_data.get("thumbnail_url")
     panel_thumb = panel_data.get("thumbnail_url")
     final_thumb = sec_thumb if sec_thumb else panel_thumb
@@ -1346,9 +1344,6 @@ class DynamicSectionsSupportRolesModal(discord.ui.Modal):
         )
 
 
-# ==============================================================================
-# 📂 إعدادات الفئات والصور المصغرة الجديدة بناءً على طلبك والصورة التوضيحية
-# ==============================================================================
 class AskCategoriesChoiceView(discord.ui.View):
     def __init__(self, panel_name: str):
         super().__init__(timeout=60)
@@ -1647,9 +1642,6 @@ class DynamicSectionsQuestionsModal(discord.ui.Modal):
         )
 
 
-# ==============================================================================
-# ⚡ إعدادات الردود السريعة الجديدة
-# ==============================================================================
 class AskQuickRepliesChoiceView(discord.ui.View):
     def __init__(self, panel_name: str, use_descriptions: bool, use_questions: bool):
         super().__init__(timeout=60)
@@ -1877,7 +1869,7 @@ class CustomHigherRolesModal(discord.ui.Modal):
         embed = discord.Embed(title="🎨 ╎ تخصيص ألوان الإيمبد", description="هل تريد تخصيص ألوان الإيمبد الخاص بالبانل والتذاكر؟", color=0x2B2D31)
         await interaction.response.send_message(
             embed=embed,
-            view=AskEmbedColorChoiceView(self.panel_name, self.use_descriptions, self.use_questions, self.use_quick_replies),
+            view=EmbedColorChoiceView(self.panel_name, self.use_descriptions, self.use_questions, self.use_quick_replies),
             ephemeral=True
         )
 
@@ -1927,8 +1919,9 @@ class TicketPublishSelectView(discord.ui.View):
             view = PanelControlView(interaction.guild.id, chosen, is_m)
 
             try:
+                # [تم التعديل هنا]: إرسال البانل في الروم كرسالة عامة للجميع وليست Ephemeral
                 await interaction.channel.send(embed=embed, view=view)
-                await interaction.response.edit_message(content=f"✅ ╎ تم إرسال البانل **{chosen}** بنجاح في هذه الروم!", embed=None, view=None)
+                await interaction.response.send_message(f"✅ ╎ تم إرسال البانل **{chosen}** بنجاح في هذه الروم للجميع!", ephemeral=True)
             except Exception as e:
                 await interaction.response.send_message(f"❌ ╎ حدث خطأ أثناء إرسال البانل: {e}", ephemeral=True)
 
@@ -1939,75 +1932,27 @@ class TicketPublishSelectView(discord.ui.View):
 class ZiuoUltimateTicketsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.auto_close_tickets_loop.start()
-        self.bot.add_view(CloseConfirmationView())
-        self.bot.add_view(TicketSetupMainView())
 
-    def cog_unload(self):
-        self.auto_close_tickets_loop.cancel()
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if message.author.bot or not message.guild:
-            return
-        db = load_tickets_db()
-        guild_id_str = str(message.guild.id)
-        channel_id_str = str(message.channel.id)
-        active_tickets = db.get(guild_id_str, {}).get("active_tickets", {})
-        if channel_id_str in active_tickets:
-            active_tickets[channel_id_str]["last_activity"] = datetime.datetime.utcnow().timestamp()
-            save_tickets_db(db)
-
-    @tasks.loop(minutes=5)
-    async def auto_close_tickets_loop(self):
-        db = load_tickets_db()
-        current_time = datetime.datetime.utcnow().timestamp()
-        
-        for guild_id_str, guild_data in list(db.items()):
-            active_tickets = guild_data.get("active_tickets", {})
-            if not active_tickets:
-                continue
-            
-            guild = self.bot.get_guild(int(guild_id_str))
-            if not guild:
-                continue
-
-            for channel_id_str, t_info in list(active_tickets.items()):
-                last_act = t_info.get("last_activity", current_time)
-                if (current_time - last_act) > 7200:
-                    channel = guild.get_channel(int(channel_id_str))
-                    if channel:
-                        try:
-                            embed_warn = discord.Embed(title="⚠ ╎ تنبيه تلقائي", description="مرّت ساعتان بدون أي تفاعل أو نشاط في هذه التذكرة، سيتم إغلاقها تلقائياً.", color=0xFFA500)
-                            await channel.send(embed=embed_warn)
-                            guild_data["active_tickets"].pop(channel_id_str, None)
-                            t_info["status"] = "مغلقة تلقائياً (بعد ساعتين)"
-                            t_info["closed_at"] = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-                            if "closed_tickets_archive" not in guild_data:
-                                guild_data["closed_tickets_archive"] = []
-                            guild_data["closed_tickets_archive"].append(t_info)
-                            save_tickets_db(db)
-                        except:
-                            pass
-
-    @app_commands.command(name="ticket-setup", description="فتح لوحة التحكم والتحكم في إعدادات وتصاميم التذاكر")
+    @app_commands.command(name="setup", description="لوحة التحكم الكاملة لنظام التذاكر الأسطوري")
     @app_commands.checks.has_permissions(administrator=True)
-    async def ticket_setup(self, interaction: discord.Interaction):
+    async def setup_tickets(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="⚙️ ╎ لوحة تحكم وإدارة نظام التذاكر المتكامل",
-            description="✦ أهلاً بك يا بطل في لوحة إدارة التذاكر والبانرات.\n✦ يمكنك من خلال الأزرار أدناه إنشاء بانل جديد، تعديله، أو ضبط الإعدادات بسهولة.",
-            color=0x2B2D31
+            title="⚙️ ╎ لوحة تحكم نظام التذاكر المتطور",
+            description="✦ أهلاً بك في لوحة تحكم التذاكر الرسمية.\nاختر من الأزرار أدناه للإدارة وإنشاء البانلات:",
+            color=0x2B2D31,
+            timestamp=datetime.datetime.utcnow()
         )
         await interaction.response.send_message(embed=embed, view=TicketSetupMainView(), ephemeral=True)
 
-    @app_commands.command(name="ticket", description="إرسال بانل التذاكر في الروم الحالي")
+    @app_commands.command(name="ticket", description="إرسال بانل تذاكر إلى هذه الروم لكي يراه الجميع")
     @app_commands.checks.has_permissions(administrator=True)
-    async def ticket_publish(self, interaction: discord.Interaction):
-        await interaction.response.send_message(
-            embed=discord.Embed(title="🎫 ╎ إرسال بانل التذاكر", description="اختر البانل الذي ترغب بإرساله في هذه الروم من القائمة أدناه:", color=0x2B2D31),
-            view=TicketPublishSelectView(interaction.guild.id),
-            ephemeral=True
+    async def publish_ticket(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="🎫 ╎ نشر بانل التذاكر",
+            description="اختر البانل الذي ترغب بإرساله إلى هذه الروم ليتمكن الأعضاء من فتح التذاكر من خلاله:",
+            color=0x2B2D31
         )
+        await interaction.response.send_message(embed=embed, view=TicketPublishSelectView(interaction.guild.id), ephemeral=True)
 
 
 async def setup(bot):
