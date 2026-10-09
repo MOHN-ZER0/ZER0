@@ -111,7 +111,6 @@ class CloseConfirmationView(discord.ui.View):
 
     @discord.ui.button(label="إعادة فتح", style=discord.ButtonStyle.success, emoji="🔓", custom_id="confirm_reopen_ticket_btn_v7")
     async def reopen_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # التحقق من مهلة الـ 5 ثوانٍ لحماية الإداري للحذف
         current_time = datetime.datetime.utcnow().timestamp()
         if self.closed_timestamp and (current_time - self.closed_timestamp) < 5:
             remaining = round(5 - (current_time - self.closed_timestamp), 1)
@@ -264,7 +263,6 @@ class QuickRepliesSelect(discord.ui.Select):
             if any(role.id in support_role_ids for role in interaction.user.roles):
                 is_staff = True
 
-        # التحقق: إذا لم يكن مشرفاً، يتم رفضه بالرسالة المطلوبة تماماً
         if not is_staff:
             await interaction.response.send_message("❌ الإدارة فقط من تستطيع استخدام هذه الردود.", ephemeral=True)
             return
@@ -603,7 +601,6 @@ class TicketInsideView(discord.ui.View):
 
         closed_time = datetime.datetime.utcnow().timestamp()
         embed_close = discord.Embed(title="🔒 تم إغلاق التذكرة", description="اختر الخيار المناسب لتنفيذه:", color=0x2B2D31)
-        # إرسال رسالة الإغلاق للجميع علنياً مع زر الفتح والحذف وتمرير وقت الإغلاق لحماية الحذف
         await interaction.channel.send(embed=embed_close, view=CloseConfirmationView(closed_timestamp=closed_time))
         await interaction.response.send_message("✅ تم إغلاق التذكرة بنجاح.", ephemeral=True)
 
@@ -914,7 +911,6 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
     panel_thumb = panel_data.get("thumbnail_url")
     final_footer_icon = sec_thumb if sec_thumb else panel_thumb
     
-    # تذييل نظيف عالمي بدون ذكر اسم سيرفر محدد
     embed.set_footer(text="نظام إدارة التذاكر", icon_url=final_footer_icon if final_footer_icon else None)
 
     sec_img = section_data.get("image_url")
@@ -977,7 +973,12 @@ class EmbedColorChoiceView(discord.ui.View):
     async def save_color_and_finish(self, interaction: discord.Interaction, color_hex: str):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
-        panel_data = db[guild_id_str]["panels"][self.panel_name]
+        
+        # تم إصلاح الخطأ هنا بالتأكد من وجود مفتاح panels ودعمه تلقائياً
+        guild_data = db.setdefault(guild_id_str, {})
+        panels_data = guild_data.setdefault("panels", {})
+        panel_data = panels_data.get(self.panel_name, {})
+        
         panel_data["color_hex"] = color_hex
 
         sections_lines = panel_data.pop("temp_sections", [])
@@ -1019,6 +1020,7 @@ class EmbedColorChoiceView(discord.ui.View):
                 "image_url": panel_data.get("image_url")
             }
 
+        panels_data[self.panel_name] = panel_data
         save_tickets_db(db)
 
         embed_done = discord.Embed(
@@ -1165,11 +1167,15 @@ class EditPanelOptionsView(discord.ui.View):
     @discord.ui.button(label="تعديل الأقسام والأسئلة", style=discord.ButtonStyle.success, emoji="📝", custom_id="edit_panel_secs_v7")
     async def edit_sections(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
-        p_data = db.get(str(interaction.guild.id), {}).get("panels", {}).get(self.panel_name, {})
+        guild_id_str = str(interaction.guild.id)
+        guild_data = db.setdefault(guild_id_str, {})
+        panels_data = guild_data.setdefault("panels", {})
+        p_data = panels_data.get(self.panel_name, {})
+        
         sections = p_data.get("sections", {})
         sec_names = [d["label"] for d in sections.values()]
         
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_sections"] = sec_names
+        p_data["temp_sections"] = sec_names
         save_tickets_db(db)
         
         await interaction.response.send_modal(SectionsConfigModal(self.panel_name, is_editing=True))
@@ -1192,10 +1198,9 @@ class LogChannelModal(discord.ui.Modal, title="📋 تحديد روم اللوج
 
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
-        if guild_id_str not in db:
-            db[guild_id_str] = {}
+        guild_data = db.setdefault(guild_id_str, {})
         
-        db[guild_id_str]["log_channel_id"] = ch_id_text
+        guild_data["log_channel_id"] = ch_id_text
         save_tickets_db(db)
 
         embed = discord.Embed(title="✅ تم الحفظ", description=f"تم تحديد روم اللوج: <#{ch_id_text}>", color=0x00FF88)
@@ -1244,18 +1249,23 @@ class PanelInfoModal(discord.ui.Modal):
 
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
-        if guild_id_str not in db:
-            db[guild_id_str] = {"panels": {}, "active_tickets": {}, "closed_tickets_archive": [], "staff_stats": {}}
+        
+        # تم إصلاح الخطأ نهائياً هنا باستخدام setdefault لتفادي KeyError: 'panels'
+        guild_data = db.setdefault(guild_id_str, {})
+        guild_data.setdefault("active_tickets", {})
+        guild_data.setdefault("closed_tickets_archive", [])
+        guild_data.setdefault("staff_stats", {})
+        panels_dict = guild_data.setdefault("panels", {})
 
         if self.is_editing and self.old_panel_name != p_name:
-            db[guild_id_str]["panels"].pop(self.old_panel_name, None)
+            panels_dict.pop(self.old_panel_name, None)
 
-        if p_name not in db[guild_id_str]["panels"]:
-            db[guild_id_str]["panels"][p_name] = {"sections": {}}
+        if p_name not in panels_dict:
+            panels_dict[p_name] = {"sections": {}}
 
-        db[guild_id_str]["panels"][p_name].update({
+        panels_dict[p_name].update({
             "title": "🎫 الدعم الفني والمساعدة",
-            "desc": self.desc_box.value, # تم اعتماد النص الخاص بك فقط بدون إضافة أي شرطات أو كلام من البوت
+            "desc": self.desc_box.value,
             "image_url": img_url,
             "thumbnail_url": thumb_url,
             "custom_footer_info": self.footer_info_box.value if self.footer_info_box.value else "",
@@ -1280,14 +1290,16 @@ class PanelDisplayTypeView(discord.ui.View):
     @discord.ui.button(label="قائمة منسدلة", style=discord.ButtonStyle.primary, emoji="📂", custom_id="disp_menu_v7")
     async def select_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["display_type"] = "menu"
+        guild_id_str = str(interaction.guild.id)
+        db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})["display_type"] = "menu"
         save_tickets_db(db)
         await interaction.response.send_modal(SectionsConfigModal(self.panel_name))
 
     @discord.ui.button(label="أزرار", style=discord.ButtonStyle.success, emoji="🔘", custom_id="disp_buttons_v7")
     async def select_buttons(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["display_type"] = "buttons"
+        guild_id_str = str(interaction.guild.id)
+        db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})["display_type"] = "buttons"
         save_tickets_db(db)
         await interaction.response.send_modal(SectionsConfigModal(self.panel_name))
 
@@ -1312,7 +1324,7 @@ class SectionsConfigModal(discord.ui.Modal, title="📝 كتابة أسماء ا
 
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
-        panel_data = db[guild_id_str]["panels"][self.panel_name]
+        panel_data = db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})
         
         panel_data["temp_sections"] = sections_lines
         save_tickets_db(db)
@@ -1340,8 +1352,9 @@ class AskSupportRolesChoiceView(discord.ui.View):
     async def no_support(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
-        sections = db.get(guild_id_str, {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
-        db[guild_id_str]["panels"][self.panel_name]["temp_roles_map"] = {sec: [] for sec in sections}
+        panel_data = db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})
+        sections = panel_data.get("temp_sections", [])
+        panel_data["temp_roles_map"] = {sec: [] for sec in sections}
         save_tickets_db(db)
 
         embed = discord.Embed(title="❓ كاتيجوري لكل قسم", description="عاوز تخصص كاتيجوري مختلف لكل قسم؟", color=0x2B2D31)
@@ -1376,7 +1389,8 @@ class DynamicSectionsSupportRolesModal(discord.ui.Modal):
             roles_map[sec] = [int(r) for r in lines]
 
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_roles_map"] = roles_map
+        guild_id_str = str(interaction.guild.id)
+        db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})["temp_roles_map"] = roles_map
         save_tickets_db(db)
 
         embed = discord.Embed(title="❓ كاتيجوري لكل قسم", description="عاوز تخصص كاتيجوري مختلف لكل قسم؟", color=0x2B2D31)
@@ -1402,8 +1416,9 @@ class AskCategoriesChoiceView(discord.ui.View):
     async def no_cat(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
-        sections = db.get(guild_id_str, {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
-        db[guild_id_str]["panels"][self.panel_name]["temp_cats_map"] = {sec: None for sec in sections}
+        panel_data = db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})
+        sections = panel_data.get("temp_sections", [])
+        panel_data["temp_cats_map"] = {sec: None for sec in sections}
         save_tickets_db(db)
 
         embed = discord.Embed(title="❓ صور مصغرة (Thumbnails)", description="عاوز تضيف صورة مصغرة (Thumbnail) لكل قسم؟", color=0x2B2D31)
@@ -1437,7 +1452,8 @@ class DynamicSectionsCategoriesModal(discord.ui.Modal):
             cats_map[sec] = val if val.isdigit() else None
 
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_cats_map"] = cats_map
+        guild_id_str = str(interaction.guild.id)
+        db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})["temp_cats_map"] = cats_map
         save_tickets_db(db)
 
         embed = discord.Embed(title="❓ صور مصغرة (Thumbnails)", description="عاوز تضيف صورة مصغرة (Thumbnail) لكل قسم؟", color=0x2B2D31)
@@ -1463,8 +1479,9 @@ class AskThumbnailsChoiceView(discord.ui.View):
     async def no_thumb(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
-        sections = db.get(guild_id_str, {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
-        db[guild_id_str]["panels"][self.panel_name]["temp_thumbs_map"] = {sec: None for sec in sections}
+        panel_data = db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})
+        sections = panel_data.get("temp_sections", [])
+        panel_data["temp_thumbs_map"] = {sec: None for sec in sections}
         save_tickets_db(db)
 
         embed = discord.Embed(title="❓ وصف الأقسام", description="عاوز تحط وصف مخصص يظهر تحت اسم كل قسم؟", color=0x2B2D31)
@@ -1497,7 +1514,8 @@ class DynamicSectionsThumbnailsModal(discord.ui.Modal):
             thumbs_map[sec] = box.value.strip()
 
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_thumbs_map"] = thumbs_map
+        guild_id_str = str(interaction.guild.id)
+        db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})["temp_thumbs_map"] = thumbs_map
         save_tickets_db(db)
 
         embed = discord.Embed(title="❓ وصف الأقسام", description="عاوز تحط وصف مخصص يظهر تحت اسم كل قسم؟", color=0x2B2D31)
@@ -1523,8 +1541,9 @@ class AskDescriptionChoiceView(discord.ui.View):
     async def no_desc(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
-        sections = db.get(guild_id_str, {}).get("panels", {}).get(self.panel_name, {}).get("temp_sections", [])
-        db[guild_id_str]["panels"][self.panel_name]["temp_descs"] = [None for _ in sections]
+        panel_data = db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})
+        sections = panel_data.get("temp_sections", [])
+        panel_data["temp_descs"] = [None for _ in sections]
         save_tickets_db(db)
 
         embed = discord.Embed(title="❓ أسئلة التذكرة", description="عاوز تعمل أسئلة تظهر للعضو لما يفتح التذكرة؟", color=0x2B2D31)
@@ -1558,7 +1577,8 @@ class DynamicSectionsDescriptionsModal(discord.ui.Modal):
             descs_list.append(box.value.strip())
 
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_descs"] = descs_list
+        guild_id_str = str(interaction.guild.id)
+        db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})["temp_descs"] = descs_list
         save_tickets_db(db)
 
         embed = discord.Embed(title="❓ أسئلة التذكرة", description="عاوز تعمل أسئلة تظهر للعضو لما يفتح التذكرة؟", color=0x2B2D31)
@@ -1584,8 +1604,8 @@ class AskCustomQuestionsChoiceView(discord.ui.View):
     async def no_questions(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
-        if guild_id_str in db and "panels" in db[guild_id_str] and self.panel_name in db[guild_id_str]["panels"]:
-            db[guild_id_str]["panels"][self.panel_name]["temp_questions_map"] = {}
+        panel_data = db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})
+        panel_data["temp_questions_map"] = {}
         save_tickets_db(db)
 
         embed = discord.Embed(title="⚡ الردود السريعة", description="عاوز تعمل ردود سريعة جاهزة للمشرفين يختاروا منها؟", color=0x2B2D31)
@@ -1639,7 +1659,8 @@ class DynamicSectionsSingleQuestionModal(discord.ui.Modal):
             questions_map_dict[sec] = [box.value.strip()]
 
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_questions_map"] = questions_map_dict
+        guild_id_str = str(interaction.guild.id)
+        db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})["temp_questions_map"] = questions_map_dict
         save_tickets_db(db)
 
         embed = discord.Embed(title="⚡ الردود السريعة", description="عاوز تعمل ردود سريعة جاهزة للمشرفين يختاروا منها؟", color=0x2B2D31)
@@ -1674,7 +1695,8 @@ class DynamicSectionsQuestionsModal(discord.ui.Modal):
             questions_map_dict[sec] = [q.strip() for q in box.value.split("\n") if q.strip()]
 
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_questions_map"] = questions_map_dict
+        guild_id_str = str(interaction.guild.id)
+        db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})["temp_questions_map"] = questions_map_dict
         save_tickets_db(db)
 
         embed = discord.Embed(title="⚡ الردود السريعة", description="عاوز تعمل ردود سريعة جاهزة للمشرفين يختاروا منها؟", color=0x2B2D31)
@@ -1743,7 +1765,8 @@ class SingleQuickRepliesForAllModal(discord.ui.Modal, title="🌐 ردود سر�
     async def on_submit(self, interaction: discord.Interaction):
         replies_list = [r.strip() for r in self.qr_box.value.split("\n") if r.strip()]
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_single_quick_replies"] = replies_list
+        guild_id_str = str(interaction.guild.id)
+        db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})["temp_single_quick_replies"] = replies_list
         save_tickets_db(db)
 
         embed = discord.Embed(title="👑 رتبة الإدارة العليا", description="عاوز تخصص رتبة إدارة عليا للتصعيد؟", color=0x2B2D31)
@@ -1780,7 +1803,8 @@ class CustomQuickRepliesPerSectionModal(discord.ui.Modal):
             qr_map[sec] = lines
 
         db = load_tickets_db()
-        db[str(interaction.guild.id)]["panels"][self.panel_name]["temp_quick_replies_map"] = qr_map
+        guild_id_str = str(interaction.guild.id)
+        db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})["temp_quick_replies_map"] = qr_map
         save_tickets_db(db)
 
         embed = discord.Embed(title="👑 رتبة الإدارة العليا", description="عاوز تخصص رتبة إدارة عليا للتصعيد؟", color=0x2B2D31)
@@ -1812,7 +1836,7 @@ class AskHigherRoleChoiceView(discord.ui.View):
     async def no_higher(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
-        panel_data = db[guild_id_str]["panels"][self.panel_name]
+        panel_data = db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})
         panel_data["temp_higher_role"] = None
         panel_data["temp_higher_roles_map"] = {}
         save_tickets_db(db)
@@ -1863,7 +1887,7 @@ class SingleHigherRoleModal(discord.ui.Modal, title="⭐ رتبة إدارية �
 
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
-        panel_data = db[guild_id_str]["panels"][self.panel_name]
+        panel_data = db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})
         panel_data["temp_higher_role"] = int(r_text)
         save_tickets_db(db)
 
@@ -1905,7 +1929,7 @@ class CustomHigherRolesModal(discord.ui.Modal):
 
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
-        panel_data = db[guild_id_str]["panels"][self.panel_name]
+        panel_data = db.setdefault(guild_id_str, {}).setdefault("panels", {}).setdefault(self.panel_name, {})
         panel_data["temp_higher_roles_map"] = map_higher
         save_tickets_db(db)
 
