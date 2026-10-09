@@ -346,6 +346,7 @@ class TicketInsideView(discord.ui.View):
 
     @discord.ui.button(label="استلام", style=discord.ButtonStyle.primary, emoji="💼", custom_id="claim_ticket_v7_btn", row=1)
     async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # [تم الإصلاح ورقم 2]: تحقق احترافي وآمن من صلاحيات الدعم وفريق العمل بدقة كاملة لمنع أي تداخل
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
         channel_id_str = str(interaction.channel.id)
@@ -372,7 +373,7 @@ class TicketInsideView(discord.ui.View):
 
         support_role_ids = ticket_info.get("support_role_ids", [])
         
-        is_staff = interaction.user.guild_permissions.administrator
+        is_staff = interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_guild
         if not is_staff and support_role_ids:
             if any(role.id in support_role_ids for role in interaction.user.roles):
                 is_staff = True
@@ -644,8 +645,7 @@ class DynamicTicketSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         if self.values[0] == "none":
-            embed = discord.Embed(title="❌ ╎ خطأ", description="لا توجد أقسام مفعلة حالياً في هذا البانل!", color=0xFF3333)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message("❌ ╎ لا توجد أقسام مفعلة حالياً في هذا البانل!", ephemeral=True)
             return
         
         sec_key = self.values[0]
@@ -656,6 +656,7 @@ class DynamicTicketSelect(discord.ui.Select):
         if custom_q and len(custom_q) > 0:
             await interaction.response.send_modal(CustomMultiQuestionModal(self.panel_name, sec_key, custom_q))
         else:
+            # [تم الإصلاح ورقم 5]: تفعيل defer فوري لتفادي انتهاء مهلة الـ Interaction وسقوطها
             await interaction.response.defer(thinking=True, ephemeral=True)
             await create_user_ticket_execution(interaction, self.panel_name, sec_key, [])
 
@@ -679,6 +680,7 @@ class CustomMultiQuestionModal(discord.ui.Modal):
             self.add_item(box)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # [تم الإصلاح ورقم 5]: تأجيل استجابة المودال لمنع المشاكل والتعليق
         await interaction.response.defer(thinking=True, ephemeral=True)
         answers_combined = []
         for q_key, box in self.inputs_map.items():
@@ -728,6 +730,7 @@ class PanelControlView(discord.ui.View):
                     if q and len(q) > 0:
                         await inter.response.send_modal(CustomMultiQuestionModal(p, k, q))
                     else:
+                        # [تم الإصلاح ورقم 5]: تأجيل الاستجابة التلقائية للأزرار المتعددة
                         await inter.response.defer(thinking=True, ephemeral=True)
                         await create_user_ticket_execution(inter, p, k, [])
 
@@ -795,14 +798,19 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
             pass
         return
 
+    # [تم الإصلاح ورقم 4]: فحص آمن لصلاحيات البوت Category وإدارتها لمنع حدوث Forbidden
     section_cat_id = section_data.get("category_id")
     category_id_str = section_cat_id if section_cat_id else panel_data.get("category_id")
     category = guild.get_channel(int(category_id_str)) if category_id_str and category_id_str.isdigit() else None
+    
     if not category:
         try:
-            category = await guild.create_category("🎫 ╎ TICKETS ARCHIVE")
+            if guild.me.guild_permissions.manage_channels:
+                category = await guild.create_category("🎫 ╎ TICKETS ARCHIVE")
+            else:
+                category = None
         except:
-            pass
+            category = None
 
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -834,7 +842,7 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
         )
     except Exception as e:
         try:
-            embed_err = discord.Embed(title="❌ ╎ خطأ", description=f"حدث خطأ أثناء إنشاء روم التذكرة: {e}", color=0xFF3333)
+            embed_err = discord.Embed(title="❌ ╎ خطأ", description=f"حدث خطأ أثناء إنشاء روم التذكرة وتأكد من صلاحيات البوت (Manage Channels): {e}", color=0xFF3333)
             await interaction.followup.send(embed=embed_err, ephemeral=True)
         except:
             pass
@@ -1028,7 +1036,6 @@ class TicketSetupMainView(discord.ui.View):
 
     @discord.ui.button(label="إنشاء بانل جديد", style=discord.ButtonStyle.success, emoji="🚀", custom_id="setup_create_panel_btn_v7")
     async def create_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # [التعديل الإصلاحي]: تم استخدام await interaction.response.send_modal بالشكل الصحيح والآمن لمنع التعليق
         await interaction.response.send_modal(PanelInfoModal(guild_id=interaction.guild.id, is_editing=False))
 
     @discord.ui.button(label="تعديل بانل موجود", style=discord.ButtonStyle.primary, emoji="⚙️", custom_id="setup_edit_panel_btn_v7")
