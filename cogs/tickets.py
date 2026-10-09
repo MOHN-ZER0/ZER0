@@ -102,14 +102,22 @@ class TicketRatingView(discord.ui.View):
 
 
 # ==============================================================================
-# 🔒 خيارات قفل/فتح التذكرة
+# 🔒 خيارات قفل/فتح التذكرة (مع مهلة حماية 5 ثوانٍ)
 # ==============================================================================
 class CloseConfirmationView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, closed_timestamp: float = 0):
         super().__init__(timeout=None)
+        self.closed_timestamp = closed_timestamp
 
     @discord.ui.button(label="إعادة فتح", style=discord.ButtonStyle.success, emoji="🔓", custom_id="confirm_reopen_ticket_btn_v7")
     async def reopen_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # التحقق من مهلة الـ 5 ثوانٍ لحماية الإداري للحذف
+        current_time = datetime.datetime.utcnow().timestamp()
+        if self.closed_timestamp and (current_time - self.closed_timestamp) < 5:
+            remaining = round(5 - (current_time - self.closed_timestamp), 1)
+            await interaction.response.send_message(f"⏳ يجب الانتظار لمدة {remaining} ثوانٍ إضافية قبل إمكانية فتح التذكرة مرة أخرى.", ephemeral=True)
+            return
+
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
         channel_id_str = str(interaction.channel.id)
@@ -217,7 +225,7 @@ class CloseConfirmationView(discord.ui.View):
 
 
 # ==============================================================================
-# ⚡ الردود السريعة (مخصصة للمشرفين فقط)
+# ⚡ الردود السريعة (للمشرفين وفريق الدعم فقط)
 # ==============================================================================
 class QuickRepliesSelect(discord.ui.Select):
     def __init__(self, quick_replies_list: list = None):
@@ -245,23 +253,20 @@ class QuickRepliesSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        # التحقق من أن المستخدم مشرف أو مستلم التذكرة وليس صاحب التذكرة العادي
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
         channel_id_str = str(interaction.channel.id)
         t_info = db.get(guild_id_str, {}).get("active_tickets", {}).get(channel_id_str, {})
         
-        creator_id = t_info.get("user_id")
-        claimer_id = t_info.get("claimed_by")
         support_role_ids = t_info.get("support_role_ids", [])
-
         is_staff = interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_guild
         if not is_staff and support_role_ids:
             if any(role.id in support_role_ids for role in interaction.user.roles):
                 is_staff = True
 
-        if interaction.user.id == creator_id and not is_staff:
-            await interaction.response.send_message("❌ الردود السريعة مخصصة للمشرفين وفريق الدعم فقط.", ephemeral=True)
+        # التحقق: إذا لم يكن مشرفاً، يتم رفضه بالرسالة المطلوبة تماماً
+        if not is_staff:
+            await interaction.response.send_message("❌ الإدارة فقط من تستطيع استخدام هذه الردود.", ephemeral=True)
             return
 
         if self.values[0] == "none":
@@ -596,8 +601,11 @@ class TicketInsideView(discord.ui.View):
             t_info["last_activity"] = datetime.datetime.utcnow().timestamp()
             save_tickets_db(db)
 
-        embed_close = discord.Embed(title="🔒 إغلاق التذكرة", description="اختر الخيار المناسب لتنفيذه:", color=0x2B2D31)
-        await interaction.response.send_message(embed=embed_close, view=CloseConfirmationView(), ephemeral=True)
+        closed_time = datetime.datetime.utcnow().timestamp()
+        embed_close = discord.Embed(title="🔒 تم إغلاق التذكرة", description="اختر الخيار المناسب لتنفيذه:", color=0x2B2D31)
+        # إرسال رسالة الإغلاق للجميع علنياً مع زر الفتح والحذف وتمرير وقت الإغلاق لحماية الحذف
+        await interaction.channel.send(embed=embed_close, view=CloseConfirmationView(closed_timestamp=closed_time))
+        await interaction.response.send_message("✅ تم إغلاق التذكرة بنجاح.", ephemeral=True)
 
 
 class AddMemberModal(discord.ui.Modal, title="➕ إضافة عضو للتذكرة"):
@@ -765,7 +773,7 @@ class PanelControlView(discord.ui.View):
         color_int = int(p_data.get("color_hex", "2b2d31").replace("#", ""), 16)
         embed = discord.Embed(
             title=p_data.get("title"),
-            description=p_data.get("desc") + "\n\n━━━━━━━━━━━━━━━━━━━━━━━\n✦ **اختر القسم المناسب لطلبك:**",
+            description=p_data.get("desc"),
             color=color_int,
             timestamp=datetime.datetime.utcnow()
         )
@@ -773,7 +781,7 @@ class PanelControlView(discord.ui.View):
             embed.set_image(url=p_data["image_url"])
         if p_data.get("thumbnail_url"):
             embed.set_thumbnail(url=p_data["thumbnail_url"])
-        embed.set_footer(text=f"{interaction.guild.name} • {self.panel_name}")
+        embed.set_footer(text=f"{self.panel_name}")
 
         is_m = p_data.get("display_type", "menu") == "menu"
         
@@ -902,12 +910,12 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
             q_ans_text += f"**{q_title}:** {ans}\n"
         embed.add_field(name="📝 [ ] : الإجابات", value=q_ans_text, inline=False)
 
-    # تطبيق الصورة المصغرة السفلية (Footer Icon / Small Image) من رابط القسم أو الفئة
     sec_thumb = section_data.get("thumbnail_url")
     panel_thumb = panel_data.get("thumbnail_url")
     final_footer_icon = sec_thumb if sec_thumb else panel_thumb
     
-    embed.set_footer(text=f"{guild.name} • تذكرة نشطة", icon_url=final_footer_icon if final_footer_icon else (guild.icon.url if guild.icon else None))
+    # تذييل نظيف عالمي بدون ذكر اسم سيرفر محدد
+    embed.set_footer(text="نظام إدارة التذاكر", icon_url=final_footer_icon if final_footer_icon else None)
 
     sec_img = section_data.get("image_url")
     panel_img = panel_data.get("image_url")
@@ -1015,7 +1023,7 @@ class EmbedColorChoiceView(discord.ui.View):
 
         embed_done = discord.Embed(
             title="🎨 تم حفظ البانل",
-            description=f"تم حفظ البانل (**{self.panel_name}**) بالطريقة اللي اخترتها.\nاستخدم الأمر `/ticket` عشان تنشره في أي روم.",
+            description=f"تم حفظ البانل (**{self.panel_name}**).\nاستخدم الأمر `/ticket` عشان تنشره في أي روم.",
             color=int(color_hex, 16)
         )
         await interaction.response.send_message(embed=embed_done, ephemeral=True)
@@ -1141,7 +1149,7 @@ class TicketSetupMainView(discord.ui.View):
                     inline=False
                 )
                 
-        embed.set_footer(text=f"{interaction.guild.name}")
+        embed.set_footer(text="نظام إدارة التذاكر")
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
@@ -1204,7 +1212,7 @@ class PanelInfoModal(discord.ui.Modal):
         p_data = db.get(str(guild_id), {}).get("panels", {}).get(panel_name, {}) if is_editing else {}
 
         self.name_box = discord.ui.TextInput(label="اسم البانل", default=panel_name if is_editing else "", max_length=50, required=True)
-        self.desc_box = discord.ui.TextInput(label="الوصف", default=p_data.get("desc", "اختر القسم المناسب لطلبك من القائمة..."), style=discord.TextStyle.paragraph, max_length=500, required=True)
+        self.desc_box = discord.ui.TextInput(label="الوصف (بدون أي إضافات أوتوماتيكية)", default=p_data.get("desc", "محتوى البانل الخاص بك..."), style=discord.TextStyle.paragraph, max_length=500, required=True)
         self.images_box = discord.ui.TextInput(label="روابط الصور (صورة البانل | الثامبنيل)", default=f"{p_data.get('image_url', '')} | {p_data.get('thumbnail_url', '')}".strip(" |"), placeholder="رابط الصورة الكبيرة | رابط الثامبنيل (اختياري)", required=False)
         self.footer_info_box = discord.ui.TextInput(label="نص التذييل (Footer)", default=p_data.get("custom_footer_info", ""), placeholder="معلومات إضافية تحت في الإيمبد", required=False)
         self.category_box = discord.ui.TextInput(label="أيدي الكاتيجوري (Category ID)", default=p_data.get("category_id", ""), max_length=30, required=True)
@@ -1247,7 +1255,7 @@ class PanelInfoModal(discord.ui.Modal):
 
         db[guild_id_str]["panels"][p_name].update({
             "title": "🎫 الدعم الفني والمساعدة",
-            "desc": self.desc_box.value,
+            "desc": self.desc_box.value, # تم اعتماد النص الخاص بك فقط بدون إضافة أي شرطات أو كلام من البوت
             "image_url": img_url,
             "thumbnail_url": thumb_url,
             "custom_footer_info": self.footer_info_box.value if self.footer_info_box.value else "",
@@ -1940,7 +1948,7 @@ class TicketPublishSelectView(discord.ui.View):
             color_int = int(p_data.get("color_hex", "2b2d31").replace("#", ""), 16)
             embed = discord.Embed(
                 title=p_data.get("title"),
-                description=p_data.get("desc") + "\n\n━━━━━━━━━━━━━━━━━━━━━━━\n✦ **اختر القسم المناسب لطلبك:**",
+                description=p_data.get("desc"),
                 color=color_int,
                 timestamp=datetime.datetime.utcnow()
             )
@@ -1948,7 +1956,7 @@ class TicketPublishSelectView(discord.ui.View):
                 embed.set_image(url=p_data["image_url"])
             if p_data.get("thumbnail_url"):
                 embed.set_thumbnail(url=p_data["thumbnail_url"])
-            embed.set_footer(text=f"{interaction.guild.name} • {chosen}")
+            embed.set_footer(text=f"{chosen}")
 
             is_m = p_data.get("display_type", "menu") == "menu"
             view = PanelControlView(interaction.guild.id, chosen, is_m)
