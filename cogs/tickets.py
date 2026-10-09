@@ -217,7 +217,7 @@ class CloseConfirmationView(discord.ui.View):
 
 
 # ==============================================================================
-# ⚡ الردود السريعة
+# ⚡ الردود السريعة (مخصصة للمشرفين فقط)
 # ==============================================================================
 class QuickRepliesSelect(discord.ui.Select):
     def __init__(self, quick_replies_list: list = None):
@@ -245,6 +245,25 @@ class QuickRepliesSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        # التحقق من أن المستخدم مشرف أو مستلم التذكرة وليس صاحب التذكرة العادي
+        db = load_tickets_db()
+        guild_id_str = str(interaction.guild.id)
+        channel_id_str = str(interaction.channel.id)
+        t_info = db.get(guild_id_str, {}).get("active_tickets", {}).get(channel_id_str, {})
+        
+        creator_id = t_info.get("user_id")
+        claimer_id = t_info.get("claimed_by")
+        support_role_ids = t_info.get("support_role_ids", [])
+
+        is_staff = interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_guild
+        if not is_staff and support_role_ids:
+            if any(role.id in support_role_ids for role in interaction.user.roles):
+                is_staff = True
+
+        if interaction.user.id == creator_id and not is_staff:
+            await interaction.response.send_message("❌ الردود السريعة مخصصة للمشرفين وفريق الدعم فقط.", ephemeral=True)
+            return
+
         if self.values[0] == "none":
             await interaction.response.send_message("❌ مفيش ردود سريعة مضافة هنا.", ephemeral=True)
             return
@@ -263,8 +282,6 @@ class QuickRepliesSelect(discord.ui.Select):
         embed = discord.Embed(description=text, color=0x2B2D31)
         await interaction.channel.send(embed=embed)
         
-        db = load_tickets_db()
-        t_info = db.get(str(interaction.guild.id), {}).get("active_tickets", {}).get(str(interaction.channel.id))
         if t_info:
             t_info["last_activity"] = datetime.datetime.utcnow().timestamp()
             save_tickets_db(db)
@@ -316,7 +333,8 @@ class ClaimSwitchSelect(discord.ui.Select):
             color=0x00FF88,
             timestamp=datetime.datetime.utcnow()
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.channel.send(embed=embed)
+        await interaction.response.send_message("✅ تم نقل التذكرة بنجاح.", ephemeral=True)
 
 
 class ClaimSwitchView(discord.ui.View):
@@ -400,8 +418,9 @@ class TicketInsideView(discord.ui.View):
                         t_inf.pop("claimed_by", None)
                         t_inf["last_activity"] = datetime.datetime.utcnow().timestamp()
                         save_tickets_db(db_inner)
-                    embed_res = discord.Embed(title="🔓 تم إلغاء الاستلام", description=f"قام {inter.user.mention} بترك استلام التذكرة.", color=0xFF3333)
-                    await inter.response.edit_message(embed=embed_res, view=None)
+                    embed_res = discord.Embed(title="🔓 تم إلغاء الاستلام", description=f"قام {inter.user.mention} بترك استلام التذكرة وأصبحت متاحة للجميع.", color=0xFF3333)
+                    await inter.channel.send(embed=embed_res)
+                    await inter.response.send_message("✅ تم إلغاء استلامك للتذكرة بنجاح.", ephemeral=True)
 
                 @discord.ui.button(label="تحويل لمشرف", style=discord.ButtonStyle.primary, emoji="🔄", custom_id="switch_claim_v7")
                 async def switch_claim(self, inter: discord.Interaction, btn: discord.ui.Button):
@@ -426,7 +445,8 @@ class TicketInsideView(discord.ui.View):
                 color=0x00FF88,
                 timestamp=datetime.datetime.utcnow()
             )
-            await interaction.response.send_message(embed=embed_switched)
+            await interaction.channel.send(embed=embed_switched)
+            await interaction.response.send_message("✅ تم استلام التذكرة بنجاح.", ephemeral=True)
             return
 
         ticket_info["claimed_by"] = interaction.user.id
@@ -498,7 +518,7 @@ class TicketInsideView(discord.ui.View):
         ticket_number_str = channel_name_parts[-1] if len(channel_name_parts) > 1 else "1"
 
         voice_chan = await guild.create_voice_channel(
-            name=f"🔊・Voice・{ticket_number_str}",
+            name=f"🎫・Voice・{ticket_number_str}",
             category=category,
             overwrites=overwrites
         )
@@ -827,7 +847,7 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
 
     closed_count = len(guild_data.get("closed_tickets_archive", []))
     total_ticket_number = len(active_tickets) + closed_count + 1
-    channel_name = f"ticket・{total_ticket_number}"
+    channel_name = f"🎫・{total_ticket_number}"
     
     try:
         ticket_channel = await guild.create_text_channel(
@@ -846,8 +866,10 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
     if "active_tickets" not in guild_data:
         guild_data["active_tickets"] = {}
     
-    current_ts = datetime.datetime.utcnow().timestamp()
-    creation_time_str = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    current_dt = datetime.datetime.utcnow()
+    current_ts = current_dt.timestamp()
+    creation_time_str = current_dt.strftime('%A, %B %d, %Y %I:%M %p')
+    
     guild_data["active_tickets"][str(ticket_channel.id)] = {
         "user_id": interaction.user.id,
         "panel": panel_name,
@@ -861,37 +883,31 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
     save_tickets_db(db)
 
     color_int = int(panel_data.get("color_hex", "2b2d31").replace("#", ""), 16)
-    staff_mentions = " ".join([r.mention for r in support_roles_objs]) if support_roles_objs else "فريق الدعم"
+    staff_mentions = " | ".join([r.mention for r in support_roles_objs]) if support_roles_objs else "فريق الدعم"
 
-    ticket_description_text = ""
-    if section_data.get("custom_questions"):
+    embed = discord.Embed(color=color_int)
+    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+    
+    embed.add_field(name="👤 [ ] : مالك التذكرة", value=f"{interaction.user.mention}\n\u200b", inline=False)
+    embed.add_field(name="🛡️ [ ] : مشرفي التذاكر", value=f"{staff_mentions}\n\u200b", inline=False)
+    embed.add_field(name="📅 [ ] : تاريخ إنشاء التذكرة", value=f"{creation_time_str}\n\u200b", inline=False)
+    embed.add_field(name="🔢 [ ] : رقم التذكرة", value=f"```{total_ticket_number}```\n\u200b", inline=False)
+    embed.add_field(name="❓ [ ] : قسم التذكرة", value=f"```{section_data['label']}```\n\u200b", inline=False)
+
+    if section_data.get("custom_questions") and answers_list:
         questions = section_data.get("custom_questions", [])
+        q_ans_text = ""
         for idx, ans in enumerate(answers_list):
             q_title = questions[idx] if idx < len(questions) else f"سؤال {idx+1}"
-            ticket_description_text += f"**{q_title}**\n```{ans}```\n"
-    else:
-        ticket_description_text = f"✦ **صاحب التذكرة:** {interaction.user.mention}\n✦ **القسم:** `{section_data['label']}`"
+            q_ans_text += f"**{q_title}:** {ans}\n"
+        embed.add_field(name="📝 [ ] : الإجابات", value=q_ans_text, inline=False)
 
-    embed = discord.Embed(
-        title=f"🎫 {section_data['label']}",
-        description=ticket_description_text,
-        color=color_int,
-        timestamp=datetime.datetime.utcnow()
-    )
-    
-    custom_footer_text = panel_data.get("custom_footer_info", "")
-    if custom_footer_text:
-        footer_combined = f"{guild.name} • {custom_footer_text}"
-    else:
-        footer_combined = f"{guild.name}"
-
-    embed.set_footer(text=footer_combined, icon_url=guild.icon.url if guild.icon else None)
-
+    # تطبيق الصورة المصغرة السفلية (Footer Icon / Small Image) من رابط القسم أو الفئة
     sec_thumb = section_data.get("thumbnail_url")
     panel_thumb = panel_data.get("thumbnail_url")
-    final_thumb = sec_thumb if sec_thumb else panel_thumb
-    if final_thumb:
-        embed.set_thumbnail(url=final_thumb)
+    final_footer_icon = sec_thumb if sec_thumb else panel_thumb
+    
+    embed.set_footer(text=f"{guild.name} • تذكرة نشطة", icon_url=final_footer_icon if final_footer_icon else (guild.icon.url if guild.icon else None))
 
     sec_img = section_data.get("image_url")
     panel_img = panel_data.get("image_url")
@@ -902,8 +918,9 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
     quick_replies_data = section_data.get("quick_replies", [])
 
     try:
+        content_ping = f"{interaction.user.mention} | {staff_mentions}"
         sent_msg = await ticket_channel.send(
-            content=f"🔔 {interaction.user.mention} {staff_mentions}", 
+            content=content_ping, 
             embed=embed, 
             view=TicketInsideView(guild.id, panel_name, quick_replies_data, higher_role_id)
         )
@@ -1095,7 +1112,7 @@ class TicketSetupMainView(discord.ui.View):
         
         embed = discord.Embed(
             title="📊 إحصائيات الدعم الفني",
-            description="بيانات وأداء المشرفين في التذاكر:",
+            description="ترتيب وأداء المشرفين حسب إجمالي النجوم/النقاط المجمعة:\n",
             color=0x2B2D31,
             timestamp=datetime.datetime.utcnow()
         )
@@ -1103,22 +1120,29 @@ class TicketSetupMainView(discord.ui.View):
         if not staff_stats:
             embed.add_field(name="مفيش بيانات", value="مفيش تذاكر اتستلمت أو اتقيمت لحد دلوقتي.", inline=False)
         else:
-            for s_id, data in staff_stats.items():
+            sorted_staff = sorted(
+                staff_stats.items(),
+                key=lambda x: x[1].get("total_stars", 0),
+                reverse=True
+            )
+            
+            medals = ["🥇", "🥈", "🥉"]
+            for idx, (s_id, data) in enumerate(sorted_staff):
                 member = interaction.guild.get_member(int(s_id))
                 m_name = member.mention if member else f"<@{s_id}>"
                 claimed = data.get("claimed", 0)
-                total_s = data.get("total_stars", 0)
-                count = data.get("ratings_count", 0)
-                avg = round(total_s / count, 1) if count > 0 else 0.0
+                total_stars = data.get("total_stars", 0)
+                
+                prefix_medal = medals[idx] if idx < len(medals) else f"#{idx+1}"
                 
                 embed.add_field(
-                    name=f"👤 المشرف: {m_name}",
-                    value=f"💼 التذاكر: `{claimed}` | ⭐ التقييم: `{avg} / 5` ({count} تقييم)",
+                    name=f"{prefix_medal} المشرف: {m_name}",
+                    value=f"💼 التذاكر المستلمة: `{claimed}`\n⭐ مجموع النقاط/النجوم: `{total_stars}`\n\u200b",
                     inline=False
                 )
                 
         embed.set_footer(text=f"{interaction.guild.name}")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
 class EditPanelOptionsView(discord.ui.View):
