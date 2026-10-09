@@ -1028,7 +1028,8 @@ class TicketSetupMainView(discord.ui.View):
 
     @discord.ui.button(label="إنشاء بانل جديد", style=discord.ButtonStyle.success, emoji="🚀", custom_id="setup_create_panel_btn_v7")
     async def create_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(PanelInfoModal(interaction.guild.id, is_editing=False))
+        # [التعديل الإصلاحي]: تم استخدام await interaction.response.send_modal بالشكل الصحيح والآمن لمنع التعليق
+        await interaction.response.send_modal(PanelInfoModal(guild_id=interaction.guild.id, is_editing=False))
 
     @discord.ui.button(label="تعديل بانل موجود", style=discord.ButtonStyle.primary, emoji="⚙️", custom_id="setup_edit_panel_btn_v7")
     async def edit_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1125,7 +1126,7 @@ class EditPanelOptionsView(discord.ui.View):
 
     @discord.ui.button(label="تعديل معلومات البانل والوصوفات", style=discord.ButtonStyle.primary, emoji="✏️", custom_id="edit_panel_info_v7")
     async def edit_info(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(PanelInfoModal(interaction.guild.id, is_editing=True, panel_name=self.panel_name))
+        await interaction.response.send_modal(PanelInfoModal(guild_id=interaction.guild.id, is_editing=True, panel_name=self.panel_name))
 
     @discord.ui.button(label="تعديل الفئات والأقسام والأسئلة", style=discord.ButtonStyle.success, emoji="📝", custom_id="edit_panel_secs_v7")
     async def edit_sections(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1167,9 +1168,9 @@ class LogChannelModal(discord.ui.Modal, title="📋 ╎ إعداد روم الل
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-class PanelInfoModal(discord.ui.Modal, title="⚙️ ╎ إعدادات بانل التذاكر والأسفل"):
+class PanelInfoModal(discord.ui.Modal):
     def __init__(self, guild_id: int, is_editing=False, panel_name=""):
-        super().__init__()
+        super().__init__(title="⚙️ ╎ إعدادات بانل التذاكر والأسفل")
         self.is_editing = is_editing
         self.old_panel_name = panel_name
 
@@ -1919,7 +1920,6 @@ class TicketPublishSelectView(discord.ui.View):
             view = PanelControlView(interaction.guild.id, chosen, is_m)
 
             try:
-                # [تم التعديل هنا]: إرسال البانل في الروم كرسالة عامة للجميع وليست Ephemeral
                 await interaction.channel.send(embed=embed, view=view)
                 await interaction.response.send_message(f"✅ ╎ تم إرسال البانل **{chosen}** بنجاح في هذه الروم للجميع!", ephemeral=True)
             except Exception as e:
