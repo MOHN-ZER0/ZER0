@@ -168,12 +168,6 @@ def update_levels_setting(guild_id: int, column: str, value):
     conn.commit()
     conn.close()
 
-def create_progress_bar(current_xp, req_xp, length=10):
-    percent = min(1.0, max(0.0, current_xp / req_xp)) if req_xp > 0 else 0
-    filled = int(length * percent)
-    empty = length - filled
-    return "🟩" * filled + "⬛" * empty
-
 def generate_levels_panel_embed(guild: discord.Guild):
     cfg = get_levels_settings(guild.id)
     status_str = "مفعّل 🟢" if cfg["status"] else "متوقف 🔴"
