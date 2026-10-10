@@ -597,7 +597,7 @@ class TopLeaderboardView(discord.ui.View):
         rows = self.fetch_data()
         lines = []
         for i, r in enumerate(rows[:5], 1):
-            lines.append(f"#{i}• <@{r[0]>: {r[1]} XP")
+            lines.append(f"#{i}• <@{r[0]}>: {r[1]} XP")
         return discord.Embed(title=f"📋 Top {self.duration} XP", description="\n".join(lines) if lines else "لا توجد بيانات.", color=0x2B2D31)
 
     @discord.ui.button(style=discord.ButtonStyle.primary, emoji="◀", custom_id="t_prev_v7")
