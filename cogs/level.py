@@ -19,7 +19,7 @@ def init_levels_db():
             guild_id INTEGER PRIMARY KEY,
             status INTEGER DEFAULT 1,
             announcement_channel INTEGER,
-            msg_type TEXT DEFAULT 'embed',
+            msg_type TEXT DEFAULT 'text',
             level_message TEXT DEFAULT 'تهانينا يا {user}! لقد صعدت إلى مستوى جديد، استمر في تفاعلك الرائع!',
             level_embed_title TEXT DEFAULT '♦ ترقية إلى المستوى [{level}]',
             level_image TEXT,
@@ -132,7 +132,7 @@ def get_levels_settings(guild_id: int):
     return {
         "status": bool(row[0]),
         "announcement_channel": row[1],
-        "msg_type": row[2],
+        "msg_type": row[2] if row[2] else "text",
         "level_message": row[3],
         "level_embed_title": row[4],
         "level_image": row[5],
@@ -209,10 +209,6 @@ def generate_levels_panel_embed(guild: discord.Guild):
     embed.set_footer(text="نظام إدارة المستويات والتفاعل الفائق")
     return embed
 
-
-# ==============================================================================
-# 🛠️ خطوات إعداد الـ XP والتفاعل (Modals & Views)
-# ==============================================================================
 class Step5PeriodicRewardModal(discord.ui.Modal, title="🏆 الخطوة 5: مكافأة التفاعل الدوري"):
     role_box = discord.ui.TextInput(label="أيدي رتبة المكافأة التفاعلية", placeholder="Role ID", max_length=30, required=True)
     type_box = discord.ui.TextInput(label="النوع (day / week / month)", default="week", max_length=10, required=True)
@@ -236,7 +232,6 @@ class Step5PeriodicRewardModal(discord.ui.Modal, title="🏆 الخطوة 5: م�
         except ValueError:
             await interaction.response.send_message(embed=discord.Embed(title="❌ خطأ", description="تأكد من صحة أيدي الرتبة.", color=0xFF3333), ephemeral=True)
 
-
 class Step5QueryView(discord.ui.View):
     def __init__(self, cfg):
         super().__init__(timeout=60)
@@ -251,7 +246,6 @@ class Step5QueryView(discord.ui.View):
         await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
         embed_ok = discord.Embed(title="✅ تم حفظ المعلومات", description="تم حفظ كافة إعدادات النظام بنجاح.", color=0x00FF88)
         await interaction.followup.send(embed=embed_ok, ephemeral=True)
-
 
 class Step3XpValuesModal(discord.ui.Modal, title="⚙️ الخطوة 3: تحديد نطاق نقاط الـ XP"):
     def __init__(self, cfg):
@@ -288,7 +282,6 @@ class Step3XpValuesModal(discord.ui.Modal, title="⚙️ الخطوة 3: تحد�
                 update_levels_setting(interaction.guild.id, "min_reaction_xp", int(self.react_min.value))
                 update_levels_setting(interaction.guild.id, "max_reaction_xp", int(self.react_max.value))
 
-            # الانتقال لسؤال الخطوة الأخيرة (مكافأة التفاعل الدوري)
             await interaction.response.send_message(
                 embed=discord.Embed(
                     title="🏆 الخطوة 4: رتبة مكافأة التفاعل الدوري",
@@ -302,7 +295,6 @@ class Step3XpValuesModal(discord.ui.Modal, title="⚙️ الخطوة 3: تحد�
             embed_err = discord.Embed(title="❌ خطأ", description="يرجى إدخال أرقام صحيحة فقط في نطاق النقاط.", color=0xFF3333)
             await interaction.response.send_message(embed=embed_err, ephemeral=True)
 
-
 class Step2XpMessageModal(discord.ui.Modal, title="💬 الخطوة 2: رسالة وشكل الترقية"):
     msg_box = discord.ui.TextInput(
         label="أدخل رسالة الترقية",
@@ -313,7 +305,7 @@ class Step2XpMessageModal(discord.ui.Modal, title="💬 الخطوة 2: رسال
     )
     type_box = discord.ui.TextInput(
         label="نوع الرسالة (أكتب: embed أو text)",
-        default="embed",
+        default="text",
         max_length=10,
         required=True
     )
@@ -325,7 +317,7 @@ class Step2XpMessageModal(discord.ui.Modal, title="💬 الخطوة 2: رسال
     async def on_submit(self, interaction: discord.Interaction):
         m_type = self.type_box.value.strip().lower()
         if m_type not in ["embed", "text"]:
-            m_type = "embed"
+            m_type = "text"
 
         update_levels_setting(interaction.guild.id, "level_message", self.msg_box.value)
         update_levels_setting(interaction.guild.id, "msg_type", m_type)
@@ -339,7 +331,6 @@ class Step2XpMessageModal(discord.ui.Modal, title="💬 الخطوة 2: رسال
             view=Step3QueryView(self.cfg),
             ephemeral=True
         )
-
 
 class Step3QueryView(discord.ui.View):
     def __init__(self, cfg):
@@ -361,7 +352,6 @@ class Step3QueryView(discord.ui.View):
             view=Step5QueryView(self.cfg),
             ephemeral=True
         )
-
 
 class Step2QueryView(discord.ui.View):
     def __init__(self, cfg):
@@ -394,7 +384,6 @@ class Step2QueryView(discord.ui.View):
             ephemeral=True
         )
 
-
 class Step1XpStatesModal(discord.ui.Modal, title="⚙️ الخطوة 1: تفعيل أو تعطيل أنظمة الـ XP"):
     text_st = discord.ui.TextInput(label="الإكس بي النصي (مفعل / غير مفعل)", default="مفعل", max_length=15)
     voice_st = discord.ui.TextInput(label="الإكس بي الصوتي (مفعل / غير مفعل)", default="مفعل", max_length=15)
@@ -420,7 +409,6 @@ class Step1XpStatesModal(discord.ui.Modal, title="⚙️ الخطوة 1: تفع�
             view=Step2QueryView(cfg),
             ephemeral=True
         )
-
 
 class AdvancedEventConfigModal(discord.ui.Modal, title="🔥 إعداد نظام مضاعف الـ XP"):
     mult_box = discord.ui.TextInput(label="قيمة المضاعف (بحد أقصى 5)", default="2", max_length=3)
@@ -454,7 +442,6 @@ class AdvancedEventConfigModal(discord.ui.Modal, title="🔥 إعداد نظام
             embed_err = discord.Embed(title="❌ خطأ", description="يرجى إدخال أرقام صحيحة.", color=0xFF3333)
             await interaction.response.send_message(embed=embed_err, ephemeral=True)
 
-
 class SpecificRolesInputModal(discord.ui.Modal, title="🎯 تحديد الرتب للمضاعف"):
     roles_box = discord.ui.TextInput(label="أيديهات الرتب - كل أيدي في سطر", style=discord.TextStyle.paragraph, required=True)
 
@@ -465,7 +452,6 @@ class SpecificRolesInputModal(discord.ui.Modal, title="🎯 تحديد الرت�
             await interaction.response.send_message(embed=discord.Embed(title="❌ خطأ", description="أيديهات غير صحيحة.", color=0xFF3333), ephemeral=True)
             return
         await interaction.response.send_modal(AdvancedEventConfigModal(target_roles=",".join(valid_roles)))
-
 
 class MultiplierScopeView(discord.ui.View):
     def __init__(self):
@@ -478,7 +464,6 @@ class MultiplierScopeView(discord.ui.View):
     @discord.ui.button(label="رتب معينة 🎯", style=discord.ButtonStyle.secondary, custom_id="mult_roles_v7")
     async def scope_roles(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(SpecificRolesInputModal())
-
 
 class IgnoreCombinedModal(discord.ui.Modal, title="🚫 إدارة استثناءات الرومات والرتب"):
     roles_box = discord.ui.TextInput(label="أيديهات الرتب المستبعدة (كل أيدي في سطر)", style=discord.TextStyle.paragraph, required=False)
@@ -504,7 +489,6 @@ class IgnoreCombinedModal(discord.ui.Modal, title="🚫 إدارة استثنا�
         await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
         await interaction.followup.send(embed=discord.Embed(title="✅ تم الحفظ", description="تم تحديث الاستثناءات بنجاح.", color=0x00FF88), ephemeral=True)
 
-
 class LevelsRewardModal(discord.ui.Modal, title="🎁 إضافة رول مكافأة"):
     lvl_box = discord.ui.TextInput(label="المستوى المطلوب", placeholder="5", max_length=5)
     role_box = discord.ui.TextInput(label="أيدي الرتبة (Role ID)", max_length=30)
@@ -526,7 +510,6 @@ class LevelsRewardModal(discord.ui.Modal, title="🎁 إضافة رول مكاف
             await interaction.followup.send(embed=discord.Embed(title="✅ تم", description=f"تم ربط المستوى {lvl} بالرتبة بنجاح.", color=0x00FF88), ephemeral=True)
         except ValueError:
             await interaction.response.send_message(embed=discord.Embed(title="❌ خطأ", description="تأكد من صحة البيانات.", color=0xFF3333), ephemeral=True)
-
 
 class LevelsAdminPanelView(discord.ui.View):
     def __init__(self):
@@ -564,10 +547,6 @@ class LevelsAdminPanelView(discord.ui.View):
             return
         await interaction.response.send_modal(IgnoreCombinedModal())
 
-
-# ==============================================================================
-# 🚀 Top Leaderboard View & Select
-# ==============================================================================
 class TopDurationSelect(discord.ui.Select):
     def __init__(self, current_duration="global"):
         options = [
@@ -584,7 +563,6 @@ class TopDurationSelect(discord.ui.Select):
         view.page = 0
         view.update_select()
         await interaction.response.edit_message(embed=view.create_embed(), view=view)
-
 
 class TopLeaderboardView(discord.ui.View):
     def __init__(self, interaction_guild=None, duration="global", page=0):
@@ -623,7 +601,9 @@ class TopLeaderboardView(discord.ui.View):
         if not self.guild:
             return discord.Embed(title="Top", color=0x2B2D31)
         rows = self.fetch_data()
-        lines = [f"#{i}• <@{r[0]>: {r[1]} XP" for i, r in enumerate(rows[:5], 1)]
+        lines = []
+        for i, r in enumerate(rows[:5], 1):
+            lines.append(f"#{i}• <@{r[0]>: {r[1]} XP")
         return discord.Embed(title=f"📋 Top {self.duration} XP", description="\n".join(lines) if lines else "لا توجد بيانات.", color=0x2B2D31)
 
     @discord.ui.button(style=discord.ButtonStyle.primary, emoji="◀", custom_id="t_prev_v7")
@@ -646,10 +626,6 @@ class TopLeaderboardView(discord.ui.View):
         self.page += 1
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
-
-# ==============================================================================
-# 🚀 Cog Core Engine
-# ==============================================================================
 class UltimateLevelsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -693,6 +669,53 @@ class UltimateLevelsCog(commands.Cog):
     async def before_voice_tracker(self):
         await self.bot.wait_until_ready()
 
+    async def check_level_up(self, member, gid, udata, cfg):
+        lvl = udata["level"]
+        xp = udata["xp"]
+        req_xp = (lvl + 1) * 300 + (lvl ** 1.2 * 120)
+
+        if xp >= req_xp:
+            new_lvl = lvl + 1
+            conn = sqlite3.connect(LEVELS_DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE user_stats SET level = ? WHERE guild_id = ? AND user_id = ?", (new_lvl, gid, member.id))
+            conn.commit()
+            conn.close()
+
+            role_rewards = cfg.get("role_rewards", {})
+            assigned_roles = role_rewards.get(str(new_lvl), [])
+            role_earned_str = ""
+            for rid in assigned_roles:
+                r_target = member.guild.get_role(int(rid))
+                if r_target:
+                    try:
+                        await member.add_roles(r_target, reason=f"Level System: Reached level {new_lvl}")
+                        role_earned_str += f"\n🎁 **المكافأة:** تم منحك رتبة {r_target.mention}"
+                    except:
+                        pass
+
+            try:
+                template = cfg.get("level_message", "تهانينا يا {user}! لقد صعدت إلى مستوى جديد، استمر في تفاعلك الرائع!")
+                final_text = template.replace("{user}", member.mention).replace("{level}", f"`{new_lvl}`")
+
+                chan_id = cfg.get("announcement_channel")
+                target_channel = member.guild.get_channel(chan_id) if chan_id else member.guild.system_channel
+
+                if target_channel:
+                    if cfg["msg_type"] == "embed":
+                        embed = discord.Embed(
+                            title=f"♦ ترقية إلى المستوى [{new_lvl}]",
+                            description=f"{final_text}{role_earned_str}\n\n• **المستوى الحالي:** `{new_lvl}` 🏆",
+                            color=0x00FF88,
+                            timestamp=datetime.datetime.utcnow()
+                        )
+                        embed.set_thumbnail(url=member.display_avatar.url)
+                        await target_channel.send(content=f"🌟 مبروك يا {member.mention}!", embed=embed)
+                    else:
+                        await target_channel.send(content=f"🌟 {final_text}{role_earned_str}")
+            except:
+                pass
+
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot or not message.guild:
@@ -711,10 +734,19 @@ class UltimateLevelsCog(commands.Cog):
         row = cursor.fetchone()
         if not row:
             cursor.execute("INSERT INTO user_stats (guild_id, user_id, xp, level, messages, day_text_xp, week_text_xp, month_text_xp) VALUES (?, ?, ?, 0, 1, ?, ?, ?)", (gid, message.author.id, base_xp, base_xp, base_xp, base_xp))
+            row = (base_xp, 0, 1, base_xp, base_xp, base_xp)
         else:
-            cursor.execute("UPDATE user_stats SET xp = ?, messages = ?, day_text_xp = ?, week_text_xp = ?, month_text_xp = ? WHERE guild_id = ? AND user_id = ?", (row[0] + base_xp, row[2] + 1, row[3] + base_xp, row[4] + base_xp, row[5] + base_xp, gid, message.author.id))
+            new_xp = row[0] + base_xp
+            new_msgs = row[2] + 1
+            d_xp = row[3] + base_xp
+            w_xp = row[4] + base_xp
+            m_xp = row[5] + base_xp
+            cursor.execute("UPDATE user_stats SET xp = ?, messages = ?, day_text_xp = ?, week_text_xp = ?, month_text_xp = ? WHERE guild_id = ? AND user_id = ?", (new_xp, new_msgs, d_xp, w_xp, m_xp, gid, message.author.id))
         conn.commit()
         conn.close()
+
+        udata = {"xp": row[0] + base_xp, "level": row[1]}
+        await self.check_level_up(message.author, gid, udata, cfg)
 
     @app_commands.command(name="top", description="عرض المتصدرين")
     async def top(self, interaction: discord.Interaction):
@@ -737,7 +769,6 @@ class UltimateLevelsCog(commands.Cog):
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_levels(self, interaction: discord.Interaction):
         await interaction.response.send_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView(), ephemeral=True)
-
 
 async def setup(bot):
     await bot.add_cog(UltimateLevelsCog(bot))
