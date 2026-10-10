@@ -13,13 +13,8 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# أيدي السيرفر الخاص بكم للمزامنة الفورية للأوامر
-MY_GUILD = discord.Object(id=1515399068694614087)
-
 @bot.event
-async def on_ready():
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Zero Bot | ZIUO - MC Ultimate"))
-    
+async def setup_hook():
     # تحميل ملفات الأوامر (Cogs)
     if os.path.exists("./cogs"):
         for filename in os.listdir("./cogs"):
@@ -30,14 +25,16 @@ async def on_ready():
                 except Exception as e:
                     print(f"⚠️ Failed to load Cog {filename}: {e}")
 
+    # مزامنة الأوامر عالمياً لجميع السيرفرات (Global Sync)
     try:
-        bot.tree.clear_commands(guild=MY_GUILD)
-        bot.tree.copy_global_to(guild=MY_GUILD)
-        await bot.tree.sync(guild=MY_GUILD)
-        print(f"✅ Synced commands successfully to ZIUO MC Server!")
+        synced = await bot.tree.sync()
+        print(f"🌍 Synced {len(synced)} command(s) globally across all servers!")
     except Exception as e:
-        print(f"⚠️ Sync Error: {e}")
-        
+        print(f"⚠️ Global Sync Error: {e}")
+
+@bot.event
+async def on_ready():
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Zero Bot | ZIUO - MC Ultimate"))
     print(f"✅ Zero Bot is Online as {bot.user}!")
 
 # جلب التوكن بأمان من متغيرات البيئة
