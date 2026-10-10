@@ -195,7 +195,7 @@ def generate_levels_panel_embed(guild: discord.Guild):
 
 
 # ==============================================================================
-# 🛠️ الواجهات المنبثقة والنافذة الإدارية (Modals & Views)
+# 🛠️ الواجهات المنبثقة (Modals)
 # ==============================================================================
 class LevelsXpModal(discord.ui.Modal, title="⚙️ ضبط نطاقات وكولدلاون الـ XP"):
     min_text = discord.ui.TextInput(label="أدنى XP نصي", default="5", max_length=5)
@@ -220,25 +220,9 @@ class LevelsXpModal(discord.ui.Modal, title="⚙️ ضبط نطاقات وكول
             await interaction.response.send_message(embed=embed_err, ephemeral=True)
 
 class LevelsMessageModal(discord.ui.Modal, title="💬 رسائل وشكل الترقية الاحترافي"):
-    title_box = discord.ui.TextInput(
-        label="عنوان الـ Embed (استخدم {level})",
-        default="♦ ترقية إلى المستوى [{level}]",
-        max_length=256,
-        required=True
-    )
-    msg_box = discord.ui.TextInput(
-        label="محتوى الرسالة (استخدم {user} و {level})",
-        default="تهانينا يا {user}! لقد صعدت إلى مستوى جديد، استمر في تفاعلك الرائع!",
-        style=discord.TextStyle.paragraph,
-        max_length=1000,
-        required=True
-    )
-    img_box = discord.ui.TextInput(
-        label="رابط صورة / بانر الترقية (اختياري)",
-        placeholder="https://...",
-        max_length=300,
-        required=False
-    )
+    title_box = discord.ui.TextInput(label="عنوان الـ Embed (استخدم {level})", default="♦ ترقية إلى المستوى [{level}]", max_length=256, required=True)
+    msg_box = discord.ui.TextInput(label="محتوى الرسالة (استخدم {user} و {level})", default="تهانينا يا {user}! لقد صعدت إلى مستوى جديد، استمر في تفاعلك الرائع!", style=discord.TextStyle.paragraph, max_length=1000, required=True)
+    img_box = discord.ui.TextInput(label="رابط صورة / بانر الترقية (اختياري)", placeholder="https://...", max_length=300, required=False)
 
     async def on_submit(self, interaction: discord.Interaction):
         update_levels_setting(interaction.guild.id, "level_embed_title", self.title_box.value)
@@ -302,7 +286,7 @@ class LevelsRewardModal(discord.ui.Modal, title="🎁 إضافة رول مكاف
 
 
 # ==============================================================================
-# 🎛️ قائمة اختيار مدة التوب (Duration Select Dropdown)
+# 🎛️ القوائم والـ Views (بدون timeout وبـ custom_id ثابتة لتدعم Persistent Views)
 # ==============================================================================
 class TopDurationSelect(discord.ui.Select):
     def __init__(self, current_duration="global"):
@@ -312,7 +296,7 @@ class TopDurationSelect(discord.ui.Select):
             discord.SelectOption(label="Week", value="week", description="عرض متصدري الأسبوع فقط", emoji="🗓️", default=(current_duration == "week")),
             discord.SelectOption(label="Month", value="month", description="عرض متصدري الشهر فقط", emoji="📆", default=(current_duration == "month")),
         ]
-        super().__init__(placeholder="Select the duration", min_values=1, max_values=1, options=options, custom_id="top_duration_select_v7")
+        super().__init__(placeholder="Select the duration", min_values=1, max_values=1, options=options, custom_id="top_duration_select_persistent_v7")
 
     async def callback(self, interaction: discord.Interaction):
         view: TopLeaderboardView = self.view
@@ -323,8 +307,8 @@ class TopDurationSelect(discord.ui.Select):
 
 
 class TopLeaderboardView(discord.ui.View):
-    def __init__(self, interaction_guild, duration="global", page=0):
-        super().__init__(timeout=180)
+    def __init__(self, interaction_guild=None, duration="global", page=0):
+        super().__init__(timeout=None)
         self.guild = interaction_guild
         self.duration = duration
         self.page = page
@@ -339,6 +323,8 @@ class TopLeaderboardView(discord.ui.View):
         self.add_item(self.next_btn)
 
     def fetch_data(self):
+        if not self.guild:
+            return []
         conn = sqlite3.connect(LEVELS_DB_FILE)
         cursor = conn.cursor()
         
@@ -356,6 +342,9 @@ class TopLeaderboardView(discord.ui.View):
         return rows
 
     def create_embed(self):
+        if not self.guild:
+            return discord.Embed(title="Top Leaderboard", description="Panel initialized.", color=0x2B2D31)
+        
         rows = self.fetch_data()
         cfg = get_levels_settings(self.guild.id)
         
@@ -400,16 +389,18 @@ class TopLeaderboardView(discord.ui.View):
         embed.set_footer(text=f"Page {self.page + 1} of {max_pages} ✦ نظام المستويات")
         return embed
 
-    @discord.ui.button(style=discord.ButtonStyle.primary, emoji="◀", custom_id="t_prev_v7")
+    @discord.ui.button(style=discord.ButtonStyle.primary, emoji="◀", custom_id="t_prev_persistent_v7")
     async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.guild = interaction.guild
         if self.page > 0:
             self.page -= 1
             await interaction.response.edit_message(embed=self.create_embed(), view=self)
         else:
             await interaction.response.defer()
 
-    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_myrank_v7")
+    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_myrank_persistent_v7")
     async def my_rank_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.guild = interaction.guild
         rows = self.fetch_data()
         uid = interaction.user.id
         found_idx = None
@@ -425,20 +416,18 @@ class TopLeaderboardView(discord.ui.View):
             embed_err = discord.Embed(title="❌ خطأ", description="ليس لديك تفاعل مسجل في هذه القائمة بعد.", color=0xFF3333)
             await interaction.response.send_message(embed=embed_err, ephemeral=True)
 
-    @discord.ui.button(style=discord.ButtonStyle.primary, emoji="▶", custom_id="t_next_v7")
+    @discord.ui.button(style=discord.ButtonStyle.primary, emoji="▶", custom_id="t_next_persistent_v7")
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.guild = interaction.guild
         self.page += 1
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
 
-# ==============================================================================
-# 🎛️ لوحة التحكم الإدارية (Admin Panel View)
-# ==============================================================================
 class LevelsAdminPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="تشغيل / إيقاف النظام", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="p_tgl_levels_v7")
+    @discord.ui.button(label="تشغيل / إيقاف النظام", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="p_tgl_levels_persistent_v7")
     async def toggle_sys(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
@@ -447,25 +436,25 @@ class LevelsAdminPanelView(discord.ui.View):
         update_levels_setting(interaction.guild.id, "status", new_status)
         await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=self)
 
-    @discord.ui.button(label="إعدادات الـ XP", style=discord.ButtonStyle.primary, emoji="⚙️", row=0, custom_id="p_xp_cfg_levels_v7")
+    @discord.ui.button(label="إعدادات الـ XP", style=discord.ButtonStyle.primary, emoji="⚙️", row=0, custom_id="p_xp_cfg_levels_persistent_v7")
     async def xp_cfg_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_modal(LevelsXpModal())
 
-    @discord.ui.button(label="رسالة الترقية والـ Embed", style=discord.ButtonStyle.secondary, emoji="💬", row=0, custom_id="p_msg_cfg_levels_v7")
+    @discord.ui.button(label="رسالة الترقية والـ Embed", style=discord.ButtonStyle.secondary, emoji="💬", row=0, custom_id="p_msg_cfg_levels_persistent_v7")
     async def msg_cfg_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_modal(LevelsMessageModal())
 
-    @discord.ui.button(label="بدء حدث مضاعف", style=discord.ButtonStyle.success, emoji="🔥", row=1, custom_id="p_event_btn_levels_v7")
+    @discord.ui.button(label="بدء حدث مضاعف", style=discord.ButtonStyle.success, emoji="🔥", row=1, custom_id="p_event_btn_levels_persistent_v7")
     async def event_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_modal(LevelsEventModal())
 
-    @discord.ui.button(label="إضافة رول مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=1, custom_id="p_reward_btn_levels_v7")
+    @discord.ui.button(label="إضافة رول مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=1, custom_id="p_reward_btn_levels_persistent_v7")
     async def reward_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
@@ -473,7 +462,7 @@ class LevelsAdminPanelView(discord.ui.View):
 
 
 # ==============================================================================
-# 🚀 محرك التشغيل البرمجي والمنطق الأساسي (Cog Core Engine - > 1000 Lines)
+# 🚀 محرك التشغيل البرمجي والمنطق الأساسي (Cog Core Engine)
 # ==============================================================================
 class UltimateLevelsCog(commands.Cog):
     def __init__(self, bot):
@@ -485,7 +474,7 @@ class UltimateLevelsCog(commands.Cog):
 
     async def cog_load(self):
         self.bot.add_view(LevelsAdminPanelView())
-        self.bot.add_view(TopLeaderboardView(None))
+        self.bot.add_view(TopLeaderboardView())
 
     @tasks.loop(minutes=1)
     async def voice_tracker(self):
