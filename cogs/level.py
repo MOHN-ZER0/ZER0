@@ -5,8 +5,6 @@ import datetime
 import random
 import time
 import sqlite3
-import re
-import os
 
 LEVELS_DB_FILE = "ultimate_levels_database.db"
 
@@ -306,7 +304,7 @@ class MultiplierValueModal(discord.ui.Modal, title="⚡ تعيين قيمة ال
 
 class SelectUsersForMultiplier(discord.ui.UserSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الأعضاء لتطبيق المضاعف عليهم", min_values=1, max_values=10, custom_id="sel_mult_users")
+        super().__init__(placeholder="اختر الأعضاء لتطبيق المضاعف عليهم", min_values=1, max_values=10, custom_id="sel_mult_users_v7")
 
     async def callback(self, interaction: discord.Interaction):
         u_ids = [u.id for u in self.values]
@@ -314,7 +312,7 @@ class SelectUsersForMultiplier(discord.ui.UserSelect):
 
 class SelectRolesForMultiplier(discord.ui.RoleSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الرتب لتطبيق المضاعف عليها", min_values=1, max_values=10, custom_id="sel_mult_roles")
+        super().__init__(placeholder="اختر الرتب لتطبيق المضاعف عليها", min_values=1, max_values=10, custom_id="sel_mult_roles_v7")
 
     async def callback(self, interaction: discord.Interaction):
         r_ids = [r.id for r in self.values]
@@ -322,7 +320,7 @@ class SelectRolesForMultiplier(discord.ui.RoleSelect):
 
 class SelectChannelsForMultiplier(discord.ui.ChannelSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الرومات لتطبيق المضاعف عليها", min_values=1, max_values=10, custom_id="sel_mult_chans")
+        super().__init__(placeholder="اختر الرومات لتطبيق المضاعف عليها", min_values=1, max_values=10, custom_id="sel_mult_chans_v7")
 
     async def callback(self, interaction: discord.Interaction):
         c_ids = [c.id for c in self.values]
@@ -330,23 +328,23 @@ class SelectChannelsForMultiplier(discord.ui.ChannelSelect):
 
 class MultiplierTypeSelectView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=60)
+        super().__init__(timeout=None)
 
-    @discord.ui.button(label="مضاعف لأعضاء 👤", style=discord.ButtonStyle.primary, custom_id="m_type_user")
+    @discord.ui.button(label="مضاعف لأعضاء 👤", style=discord.ButtonStyle.primary, custom_id="m_type_user_v7")
     async def mult_user(self, interaction: discord.Interaction, button: discord.ui.Button):
-        v = discord.ui.View()
+        v = discord.ui.View(timeout=60)
         v.add_item(SelectUsersForMultiplier())
         await interaction.response.send_message(embed=discord.Embed(title="👤 اختر الأعضاء", description="حدد الأعضاء من القائمة أدناه:", color=0x2B2D31), view=v, ephemeral=True)
 
-    @discord.ui.button(label="مضاعف لرتب 🛡️", style=discord.ButtonStyle.secondary, custom_id="m_type_role")
+    @discord.ui.button(label="مضاعف لرتب 🛡️", style=discord.ButtonStyle.secondary, custom_id="m_type_role_v7")
     async def mult_role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        v = discord.ui.View()
+        v = discord.ui.View(timeout=60)
         v.add_item(SelectRolesForMultiplier())
         await interaction.response.send_message(embed=discord.Embed(title="🛡️ اختر الرتب", description="حدد الرتب من القائمة أدناه:", color=0x2B2D31), view=v, ephemeral=True)
 
-    @discord.ui.button(label="مضاعف لرومات 💬/🎙️", style=discord.ButtonStyle.success, custom_id="m_type_chan")
+    @discord.ui.button(label="مضاعف لرومات 💬/🎙️", style=discord.ButtonStyle.success, custom_id="m_type_chan_v7")
     async def mult_chan(self, interaction: discord.Interaction, button: discord.ui.Button):
-        v = discord.ui.View()
+        v = discord.ui.View(timeout=60)
         v.add_item(SelectChannelsForMultiplier())
         await interaction.response.send_message(embed=discord.Embed(title="💬 اختر الرومات", description="حدد الرومات من القائمة أدناه:", color=0x2B2D31), view=v, ephemeral=True)
 
@@ -547,7 +545,7 @@ class TopLeaderboardView(discord.ui.View):
             self.page -= 1
             await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
-    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_my_v7")
+    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_my_v7", custom_id_placeholder="t_my_v7")
     async def my_rank_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.guild = interaction.guild
         rows = self.fetch_data()
@@ -779,7 +777,6 @@ class UltimateLevelsCog(commands.Cog):
         pct = min(1.0, xp / req_xp) if req_xp > 0 else 0
         filled = int(pct * 12)
         
-        # نظام تلوين شريط التقدم الدقيق بناءً على الألوان والأوصاص المطلوبة (1x لحد 5x)
         if user_mult >= 4.5:
             bar = "⬜" * filled + "⬛" * (12 - filled)
         elif user_mult >= 3.5:
