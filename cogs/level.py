@@ -203,7 +203,17 @@ def generate_levels_panel_embed(guild: discord.Guild):
     embed.set_footer(text="نظام إدارة المستويات والتفاعل الفائق")
     return embed
 
-class Step5PeriodicRewardModal(discord.ui.Modal, title="🏆 الخطوة 5: مكافأة التفاعل الدوري"):
+class AnnouncementChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(placeholder="📢 اختر قناة إعلانات الترقية", channel_types=[discord.ChannelType.text], min_values=1, max_values=1, custom_id="sel_announce_chan_v7")
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_chan = self.values[0]
+        update_levels_setting(interaction.guild.id, "announcement_channel", selected_chan.id)
+        await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
+        await interaction.followup.send(embed=discord.Embed(title="✅ تم تحديد القناة", description=f"تم تعيين قناة إعلانات الترقية إلى {selected_chan.mention} بنجاح.", color=0x00FF88), ephemeral=True)
+
+class Step5PeriodicRewardModal(discord.ui.Modal, title="🏆 مكافأة التفاعل الدوري"):
     role_box = discord.ui.TextInput(label="أيدي رتبة المكافأة التفاعلية", placeholder="Role ID", max_length=30, required=True)
     type_box = discord.ui.TextInput(label="النوع (day / week / month)", default="week", max_length=10, required=True)
 
@@ -226,76 +236,25 @@ class Step5PeriodicRewardModal(discord.ui.Modal, title="🏆 الخطوة 5: م�
         except ValueError:
             await interaction.response.send_message(embed=discord.Embed(title="❌ خطأ", description="تأكد من صحة أيدي الرتبة.", color=0xFF3333), ephemeral=True)
 
-class Step5QueryView(discord.ui.View):
-    def __init__(self, cfg):
-        super().__init__(timeout=60)
-        self.cfg = cfg
-
-    @discord.ui.button(label="نعم، تعيين رتبة مكافأة تفاعل ✅", style=discord.ButtonStyle.success, custom_id="q_yes_periodic_v7")
-    async def yes_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(Step5PeriodicRewardModal())
-
-    @discord.ui.button(label="لا، إنهاء وتخطي ❌", style=discord.ButtonStyle.secondary, custom_id="q_no_periodic_v7")
-    async def no_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
-        embed_ok = discord.Embed(title="✅ تم حفظ المعلومات", description="تم حفظ كافة إعدادات النظام بنجاح.", color=0x00FF88)
-        await interaction.followup.send(embed=embed_ok, ephemeral=True)
-
-class Step3XpValuesModal(discord.ui.Modal, title="⚙️ الخطوة 3: تحديد نطاق نقاط الـ XP"):
-    def __init__(self, cfg):
-        super().__init__()
-        self.cfg = cfg
-
-        if cfg["text_xp_enabled"]:
-            self.text_min = discord.ui.TextInput(label="أدنى XP نصي", default=str(cfg["min_text_xp"]), max_length=5)
-            self.text_max = discord.ui.TextInput(label="أقصى XP نصي", default=str(cfg["max_text_xp"]), max_length=5)
-            self.add_item(self.text_min)
-            self.add_item(self.text_max)
-        
-        if cfg["voice_xp_enabled"]:
-            self.voice_min = discord.ui.TextInput(label="أدنى XP صوتي", default=str(cfg["min_voice_xp"]), max_length=5)
-            self.voice_max = discord.ui.TextInput(label="أقصى XP صوتي", default=str(cfg["max_voice_xp"]), max_length=5)
-            self.add_item(self.voice_min)
-            self.add_item(self.voice_max)
-
-        if cfg["reaction_xp_enabled"]:
-            self.react_min = discord.ui.TextInput(label="أدنى XP للريأكشن", default=str(cfg["min_reaction_xp"]), max_length=5)
-            self.react_max = discord.ui.TextInput(label="أقصى XP للريأكشن", default=str(cfg["max_reaction_xp"]), max_length=5)
-            self.add_item(self.react_min)
-            self.add_item(self.react_max)
+class Step3XpValuesModal(discord.ui.Modal, title="⚙️ تحديد نقاط الـ XP"):
+    text_min = discord.ui.TextInput(label="أدنى XP نصي", default="5", max_length=5)
+    text_max = discord.ui.TextInput(label="أقصى XP نصي", default="45", max_length=5)
+    voice_min = discord.ui.TextInput(label="أدنى XP صوتي", default="2", max_length=5)
+    voice_max = discord.ui.TextInput(label="أقصى XP صوتي", default="5", max_length=5)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            if self.cfg["text_xp_enabled"]:
-                update_levels_setting(interaction.guild.id, "min_text_xp", int(self.text_min.value))
-                update_levels_setting(interaction.guild.id, "max_text_xp", int(self.text_max.value))
-            if self.cfg["voice_xp_enabled"]:
-                update_levels_setting(interaction.guild.id, "min_voice_xp", int(self.voice_min.value))
-                update_levels_setting(interaction.guild.id, "max_voice_xp", int(self.voice_max.value))
-            if self.cfg["reaction_xp_enabled"]:
-                update_levels_setting(interaction.guild.id, "min_reaction_xp", int(self.react_min.value))
-                update_levels_setting(interaction.guild.id, "max_reaction_xp", int(self.react_max.value))
+            update_levels_setting(interaction.guild.id, "min_text_xp", int(self.text_min.value))
+            update_levels_setting(interaction.guild.id, "max_text_xp", int(self.text_max.value))
+            update_levels_setting(interaction.guild.id, "min_voice_xp", int(self.voice_min.value))
+            update_levels_setting(interaction.guild.id, "max_voice_xp", int(self.voice_max.value))
 
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="🏆 الخطوة 4: رتبة مكافأة التفاعل الدوري",
-                    description="هل تريد تعيين رتبة مكافأة أسبوعية أو شهرية لأعلى شخص تفاعلاً في السيرفر؟",
-                    color=0x2B2D31
-                ),
-                view=Step5QueryView(self.cfg),
-                ephemeral=True
-            )
+            await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
+            await interaction.followup.send(embed=discord.Embed(title="✅ تم التعديل بنجاح", description="تم تحديث نطاق نقاط الـ XP بنجاح.", color=0x00FF88), ephemeral=True)
         except ValueError:
-            embed_err = discord.Embed(title="❌ خطأ", description="يرجى إدخال أرقام صحيحة فقط في نطاق النقاط.", color=0xFF3333)
-            await interaction.response.send_message(embed=embed_err, ephemeral=True)
+            await interaction.response.send_message(embed=discord.Embed(title="❌ خطأ", description="يرجى إدخال أرقام صحيحة فقط في نطاق النقاط.", color=0xFF3333), ephemeral=True)
 
-class Step2XpMessageModal(discord.ui.Modal, title="💬 الخطوة 2: رسالة وشكل الترقية"):
-    guide_box = discord.ui.TextInput(
-        label="📌 المتغيرات المتاحة للاستخدام",
-        style=discord.TextStyle.paragraph,
-        default="• منشن العضو: {user}\n• مستوى العضو: {level}\nمثال: مبروك {user} وصولك للمستوى {level}! 🎉",
-        required=False
-    )
+class Step2XpMessageModal(discord.ui.Modal, title="💬 رسالة وشكل الترقية"):
     msg_box = discord.ui.TextInput(
         label="أدخل رسالة الترقية الجديدة",
         style=discord.TextStyle.paragraph,
@@ -310,10 +269,6 @@ class Step2XpMessageModal(discord.ui.Modal, title="💬 الخطوة 2: رسال
         required=True
     )
 
-    def __init__(self, cfg):
-        super().__init__()
-        self.cfg = cfg
-
     async def on_submit(self, interaction: discord.Interaction):
         m_type = self.type_box.value.strip().lower()
         if m_type not in ["embed", "text"]:
@@ -322,83 +277,8 @@ class Step2XpMessageModal(discord.ui.Modal, title="💬 الخطوة 2: رسال
         update_levels_setting(interaction.guild.id, "level_message", self.msg_box.value)
         update_levels_setting(interaction.guild.id, "msg_type", m_type)
 
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="⚙️ الخطوة 3: تعديل نقاط الـ XP",
-                description="هل تريد تعديل نقاط الـ XP للأنظمة المفعلة حالياً؟",
-                color=0x2B2D31
-            ),
-            view=Step3QueryView(self.cfg),
-            ephemeral=True
-        )
-
-class Step3QueryView(discord.ui.View):
-    def __init__(self, cfg):
-        super().__init__(timeout=60)
-        self.cfg = cfg
-
-    @discord.ui.button(label="نعم، أريد التعديل ✅", style=discord.ButtonStyle.success, custom_id="q_yes_xp_v7")
-    async def yes_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(Step3XpValuesModal(self.cfg))
-
-    @discord.ui.button(label="لا، تخطي ❌", style=discord.ButtonStyle.secondary, custom_id="q_no_xp_v7")
-    async def no_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="🏆 الخطوة 4: رتبة مكافأة التفاعل الدوري",
-                description="هل تريد تعيين رتبة مكافأة أسبوعية أو شهرية لأعلى شخص تفاعلاً في السيرفر؟",
-                color=0x2B2D31
-            ),
-            view=Step5QueryView(self.cfg),
-            ephemeral=True
-        )
-
-class Step2QueryView(discord.ui.View):
-    def __init__(self, cfg):
-        super().__init__(timeout=60)
-        self.cfg = cfg
-
-    @discord.ui.button(label="نعم، تعيين رسالة ترقية ✅", style=discord.ButtonStyle.success, custom_id="q_yes_msg_v7")
-    async def yes_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(Step2XpMessageModal(self.cfg))
-
-    @discord.ui.button(label="لا، لا أريد ❌", style=discord.ButtonStyle.secondary, custom_id="q_no_msg_v7")
-    async def no_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="⚙️ الخطوة 3: تعديل نقاط الـ XP",
-                description="هل تريد تعديل نقاط الـ XP للأنظمة المفعلة حالياً؟",
-                color=0x2B2D31
-            ),
-            view=Step3QueryView(self.cfg),
-            ephemeral=True
-        )
-
-class Step1XpStatesModal(discord.ui.Modal, title="⚙️ الخطوة 1: تفعيل أو تعطيل أنظمة الـ XP"):
-    text_st = discord.ui.TextInput(label="الإكس بي النصي (مفعل / غير مفعل)", default="مفعل", max_length=15)
-    voice_st = discord.ui.TextInput(label="الإكس بي الصوتي (مفعل / غير مفعل)", default="مفعل", max_length=15)
-    react_st = discord.ui.TextInput(label="إكس بي الريأكشن (مفعل / غير مفعل)", default="غير مفعل", max_length=15)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        t_en = 1 if "مفعل" in self.text_st.value.strip() else 0
-        v_en = 1 if "مفعل" in self.voice_st.value.strip() else 0
-        r_en = 1 if "مفعل" in self.react_st.value.strip() else 0
-
-        update_levels_setting(interaction.guild.id, "text_xp_enabled", t_en)
-        update_levels_setting(interaction.guild.id, "voice_xp_enabled", v_en)
-        update_levels_setting(interaction.guild.id, "reaction_xp_enabled", r_en)
-
-        cfg = get_levels_settings(interaction.guild.id)
-
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="💬 الخطوة 2: إعلانات الترقية",
-                description="هل تريد تعيين رسالة ترقية عند صعود الأعضاء للمستويات؟",
-                color=0x2B2D31
-            ),
-            view=Step2QueryView(cfg),
-            ephemeral=True
-        )
+        await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
+        await interaction.followup.send(embed=discord.Embed(title="✅ تم التعديل", description="تم حفظ رسالة ونوع الترقية بنجاح.", color=0x00FF88), ephemeral=True)
 
 class AdvancedEventConfigModal(discord.ui.Modal, title="🔥 إعداد نظام مضاعف الـ XP"):
     mult_box = discord.ui.TextInput(label="قيمة المضاعف (بحد أقصى 5)", default="2", max_length=3)
@@ -489,6 +369,11 @@ class IgnoreSelectView(discord.ui.View):
         self.add_item(IgnoreRoleSelect())
         self.add_item(IgnoreChannelSelect())
 
+class AnnouncementView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(AnnouncementChannelSelect())
+
 class LevelsRewardModal(discord.ui.Modal, title="🎁 إضافة رول مكافأة"):
     lvl_box = discord.ui.TextInput(label="المستوى المطلوب", placeholder="5", max_length=5)
     role_box = discord.ui.TextInput(label="أيدي الرتبة (Role ID)", max_length=30)
@@ -523,11 +408,23 @@ class LevelsAdminPanelView(discord.ui.View):
         update_levels_setting(interaction.guild.id, "status", 0 if cfg["status"] else 1)
         await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=self)
 
-    @discord.ui.button(label="إعدادات الـ XP (شامل)", style=discord.ButtonStyle.primary, emoji="⚙️", row=0, custom_id="p_xp_unified_v7")
+    @discord.ui.button(label="قناة إعلانات الترقية", style=discord.ButtonStyle.secondary, emoji="📢", row=0, custom_id="p_ann_chan_v7")
+    async def set_announce_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return
+        await interaction.response.send_message(embed=discord.Embed(title="📢 قناة الإعلانات", description="اختر قناة إعلانات الترقية من القائمة أدناه:", color=0x2B2D31), view=AnnouncementView(), ephemeral=True)
+
+    @discord.ui.button(label="إعدادات الـ XP (تعديل النقاط)", style=discord.ButtonStyle.primary, emoji="⚙️", row=0, custom_id="p_xp_unified_v7")
     async def xp_unified_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
-        await interaction.response.send_modal(Step1XpStatesModal())
+        await interaction.response.send_modal(Step3XpValuesModal())
+
+    @discord.ui.button(label="رسالة الترقية", style=discord.ButtonStyle.secondary, emoji="💬", row=1, custom_id="p_msg_v7")
+    async def msg_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return
+        await interaction.response.send_modal(Step2XpMessageModal())
 
     @discord.ui.button(label="نظام مضاعف الـ XP", style=discord.ButtonStyle.success, emoji="🔥", row=1, custom_id="p_event_v7")
     async def event_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -656,12 +553,12 @@ class UltimateLevelsCog(commands.Cog):
                     base_xp = random.randint(cfg["min_voice_xp"], cfg["max_voice_xp"])
                     conn = sqlite3.connect(LEVELS_DB_FILE)
                     cursor = conn.cursor()
-                    cursor.execute("SELECT xp, level FROM user_stats WHERE guild_id = ? AND user_id = ?", (guild.id, m.id))
+                    cursor.execute("SELECT xp, level, voice_minutes FROM user_stats WHERE guild_id = ? AND user_id = ?", (guild.id, m.id))
                     row = cursor.fetchone()
                     if not row:
-                        cursor.execute("INSERT INTO user_stats (guild_id, user_id, xp, level) VALUES (?, ?, ?, 0)", (guild.id, m.id, base_xp))
+                        cursor.execute("INSERT INTO user_stats (guild_id, user_id, xp, level, voice_minutes) VALUES (?, ?, ?, 0, 1)", (guild.id, m.id, base_xp))
                     else:
-                        cursor.execute("UPDATE user_stats SET xp = ? WHERE guild_id = ? AND user_id = ?", (row[0] + base_xp, guild.id, m.id))
+                        cursor.execute("UPDATE user_stats SET xp = ?, voice_minutes = ? WHERE guild_id = ? AND user_id = ?", (row[0] + base_xp, row[2] + 1, guild.id, m.id))
                     conn.commit()
                     conn.close()
 
@@ -682,7 +579,6 @@ class UltimateLevelsCog(commands.Cog):
             conn.commit()
             conn.close()
 
-            # نظام الرتب التراكمية: منح الرتبة الجديدة دون إزالة الرتب القديمة
             role_rewards = cfg.get("role_rewards", {})
             assigned_roles = role_rewards.get(str(new_lvl), [])
             role_earned_str = ""
@@ -759,22 +655,61 @@ class UltimateLevelsCog(commands.Cog):
         target = member or interaction.user
         conn = sqlite3.connect(LEVELS_DB_FILE)
         cursor = conn.cursor()
-        cursor.execute("SELECT xp, level, messages FROM user_stats WHERE guild_id = ? AND user_id = ?", (interaction.guild.id, target.id))
+        cursor.execute("SELECT xp, level, messages, voice_minutes FROM user_stats WHERE guild_id = ? AND user_id = ?", (interaction.guild.id, target.id))
         row = cursor.fetchone()
+        
+        # الترتيب في السيرفر
+        cursor.execute("SELECT user_id FROM user_stats WHERE guild_id = ? ORDER BY xp DESC", (interaction.guild.id,))
+        all_users = [r[0] for r in cursor.fetchall()]
+        rank = all_users.index(target.id) + 1 if target.id in all_users else "غير محدد"
         conn.close()
-        
-        xp, lvl, msgs = row if row else (0, 0, 0)
+
+        xp, lvl, msgs, v_mins = row if row else (0, 0, 0, 0)
         req_xp = int((lvl + 1) * 300 + (lvl ** 1.2 * 120))
+        cfg = get_levels_settings(interaction.guild.id)
+
+        # التنسيق المالي المأخوذ من الصورة تماماً
+        has_mult = "نعم 🟡" if cfg["event_multiplier"] > 1.0 else "لا ⚪"
         
-        embed = discord.Embed(
-            title=f"📊 رانك العضو {target.display_name}",
-            color=0x2B2D31
-        )
+        # حساب أقصى مضاعف لرتب العضو
+        user_mult = 1.0
+        for rid, mult in cfg["role_multipliers"].items():
+            if any(r.id == rid for r in target.roles):
+                if mult > user_mult:
+                    user_mult = mult
+
+        # إيجاد رتب المكافآت المكتسبة
+        earned_roles = []
+        for l_str, r_list in cfg["role_rewards"].items():
+            if int(l_str) <= lvl:
+                for rid in r_list:
+                    r_obj = interaction.guild.get_role(rid)
+                    if r_obj:
+                        earned_roles.append(r_obj.mention)
+        
+        earned_roles_str = " ، ".join(earned_roles) if earned_roles else "لا توجد رتب مكتسبة بعد"
+
+        # شريط التقدم Visual Progress Bar
+        pct = min(1.0, xp / req_xp) if req_xp > 0 else 0
+        filled = int(pct * 12)
+        bar = "🟩" * filled + "⬛" * (12 - filled)
+
+        embed = discord.Embed(color=0x2B2D31)
+        embed.set_author(name=f"📊 [ ] : مستوي ✦ {target.display_name}")
         embed.set_thumbnail(url=target.display_avatar.url)
-        embed.add_field(name="🏆 المستوى", value=f"`{lvl}`", inline=True)
-        embed.add_field(name="✨ النقاط (XP)", value=f"`{xp} / {req_xp}`", inline=True)
-        embed.add_field(name="📝 الرسائل", value=f"`{msgs}`", inline=True)
-        
+
+        embed.add_field(name="🏆 [ ] : المستوى", value=f"```\n{lvl}\n```", inline=False)
+        embed.add_field(name="✨ [ ] : نقاط الـ XP", value=f"```\n{xp} / {req_xp}\n```", inline=False)
+        embed.add_field(name="📍 [ ] : الترتيب بالسيرفر", value=f"```\n{rank}\n```", inline=False)
+        embed.add_field(name="⚡ [ ] : مضاعف السيرفر", value=f"{has_mult}", inline=False)
+        embed.add_field(name="🛡️ [ ] : مضاعف رتبتك", value=f"```\nx{user_mult}\n```", inline=False)
+        embed.add_field(name="📝 [ ] : إجمالي الرسائل", value=f"```\n{msgs}\n```", inline=False)
+        embed.add_field(name="🎙️ [ ] : دقائق الصوت", value=f"```\n{v_mins} دقيقة\n```", inline=False)
+        embed.add_field(name="🎁 [ ] : رتب المكافآت المكتسبة", value=f"{earned_roles_str}", inline=False)
+        embed.add_field(name="📈 [ ] : شريط التقدم", value=f"{bar}", inline=False)
+
+        embed.set_footer(text=f"نظام المستويات والتفاعل | {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
+
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="setup_levels", description="[الإدارة] لوحة تحكم المستويات الشاملة")
