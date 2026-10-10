@@ -102,6 +102,96 @@ class TicketRatingView(discord.ui.View):
 
 
 # ==============================================================================
+# 📝 نافذة كتابة سبب الحذف للإداري
+# ==============================================================================
+class DeleteReasonModal(discord.ui.Modal, title="🗑️ سبب حذف التذكرة"):
+    reason_box = discord.ui.TextInput(
+        label="سبب الإغلاق / الحذف",
+        placeholder="اكتب سبب حذف التذكرة هنا...",
+        style=discord.TextStyle.paragraph,
+        max_length=300,
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        reason_text = self.reason_box.value.strip()
+        channel = interaction.channel
+        guild_id_str = str(interaction.guild.id)
+        channel_id_str = str(channel.id)
+        
+        db = load_tickets_db()
+        guild_data = db.get(guild_id_str, {})
+        ticket_data = guild_data.get("active_tickets", {}).pop(channel_id_str, None)
+        
+        if ticket_data:
+            ticket_data["status"] = "مغلقة ومحذوفة"
+            ticket_data["closed_by"] = interaction.user.id
+            ticket_data["close_reason"] = reason_text
+            ticket_data["closed_at"] = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+
+            if "closed_tickets_archive" not in guild_data:
+                guild_data["closed_tickets_archive"] = []
+            guild_data["closed_tickets_archive"].append(ticket_data)
+            save_tickets_db(db)
+
+            # إرسال الترانسكريبت إلى روم اللوج
+            messages_history = []
+            try:
+                async for msg in channel.history(limit=500, oldest_first=True):
+                    time_str = msg.created_at.strftime('%Y-%m-%d %H:%M:%S')
+                    messages_history.append(f"[{time_str}] {msg.author.name}: {msg.content}")
+            except:
+                pass
+
+            transcript_text = f"=== TRANSCRIPT: {channel.name} ===\n" + "\n".join(messages_history)
+            file_bytes = io.BytesIO(transcript_text.encode("utf-8"))
+            file = discord.File(file_bytes, filename=f"transcript-{channel.name}.txt")
+
+            log_channel_id = guild_data.get("log_channel_id")
+            if log_channel_id:
+                log_chan = interaction.guild.get_channel(int(log_channel_id))
+                if log_chan:
+                    creator_obj = interaction.guild.get_member(ticket_data.get("user_id"))
+                    closer_obj = interaction.user
+                    claimer_id = ticket_data.get("claimed_by")
+                    claimer_obj = interaction.guild.get_member(claimer_id) if claimer_id else None
+
+                    log_embed = discord.Embed(
+                        title="📁 سجل تذكرة مغلقة",
+                        color=0xFF3333,
+                        timestamp=datetime.datetime.utcnow()
+                    )
+                    log_embed.add_field(name="🎫 التذكرة", value=f"`{channel.name}`", inline=True)
+                    log_embed.add_field(name="📂 القسم", value=f"`{ticket_data.get('section')}`", inline=True)
+                    log_embed.add_field(name="👤 صاحب التذكرة", value=f"{creator_obj.mention if creator_obj else 'غير معروف'}", inline=True)
+                    log_embed.add_field(name="💼 المشرف", value=f"{claimer_obj.mention if claimer_obj else 'مفيش'}", inline=True)
+                    log_embed.add_field(name="🗑️ اتنفت بواسطة", value=f"{closer_obj.mention}", inline=True)
+                    log_embed.add_field(name="📌 سبب الحذف", value=f"```{reason_text}```", inline=False)
+
+                    try:
+                        await log_chan.send(embed=log_embed, file=file)
+                    except:
+                        pass
+
+        # إرسال رسالة سبب الحذف وإتاحة التقييم مباشرة للعضو
+        creator_id_val = ticket_data.get("user_id", interaction.user.id) if ticket_data else interaction.user.id
+        
+        embed_reason_msg = discord.Embed(
+            title="🗑️ تقرر حذف التذكرة",
+            description=f"**السبب:** {reason_text}\n**بواسطة:** {interaction.user.mention}",
+            color=0xFF3333
+        )
+        embed_rate = discord.Embed(
+            title="⭐ تقييم الخدمة",
+            description=f"يا <@{creator_id_val}> يرجى تقييم مستوى الدعم الفني قبل إغلاق التذكرة نهائياً:",
+            color=0x2B2D31
+        )
+
+        await interaction.response.send_message(embed=embed_reason_msg)
+        await channel.send(embed=embed_rate, view=TicketRatingView(channel, creator_id_val))
+
+
+# ==============================================================================
 # 🔒 خيارات قفل/فتح التذكرة (مع مهلة حماية 5 ثوانٍ)
 # ==============================================================================
 class CloseConfirmationView(discord.ui.View):
@@ -152,75 +242,8 @@ class CloseConfirmationView(discord.ui.View):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        channel = interaction.channel
-        guild_id_str = str(interaction.guild.id)
-        channel_id_str = str(channel.id)
-        
-        guild_data = db.get(guild_id_str, {})
-        ticket_data = guild_data.get("active_tickets", {}).pop(channel_id_str, None)
-        
-        if ticket_data:
-            ticket_data["status"] = "مغلقة ومحذوفة"
-            ticket_data["closed_by"] = interaction.user.id
-            ticket_data["closed_at"] = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-
-            if "closed_tickets_archive" not in guild_data:
-                guild_data["closed_tickets_archive"] = []
-            guild_data["closed_tickets_archive"].append(ticket_data)
-            save_tickets_db(db)
-
-            voice_chan_id = ticket_data.get("temp_voice_id")
-            if voice_chan_id:
-                v_chan = interaction.guild.get_channel(int(voice_chan_id))
-                if v_chan:
-                    try:
-                        await v_chan.delete()
-                    except:
-                        pass
-
-            messages_history = []
-            try:
-                async for msg in channel.history(limit=500, oldest_first=True):
-                    time_str = msg.created_at.strftime('%Y-%m-%d %H:%M:%S')
-                    messages_history.append(f"[{time_str}] {msg.author.name}: {msg.content}")
-            except:
-                pass
-
-            transcript_text = f"=== TRANSCRIPT: {channel.name} ===\n" + "\n".join(messages_history)
-            file_bytes = io.BytesIO(transcript_text.encode("utf-8"))
-            file = discord.File(file_bytes, filename=f"transcript-{channel.name}.txt")
-
-            log_channel_id = guild_data.get("log_channel_id")
-            if log_channel_id:
-                log_chan = interaction.guild.get_channel(int(log_channel_id))
-                if log_chan:
-                    creator_obj = interaction.guild.get_member(ticket_data.get("user_id"))
-                    closer_obj = interaction.user
-                    claimer_id = ticket_data.get("claimed_by")
-                    claimer_obj = interaction.guild.get_member(claimer_id) if claimer_id else None
-
-                    log_embed = discord.Embed(
-                        title="📁 سجل تذكرة مغلقة",
-                        color=0xFF3333,
-                        timestamp=datetime.datetime.utcnow()
-                    )
-                    log_embed.add_field(name="🎫 التذكرة", value=f"`{channel.name}`", inline=True)
-                    log_embed.add_field(name="📂 القسم", value=f"`{ticket_data.get('section')}`", inline=True)
-                    log_embed.add_field(name="👤 صاحب التذكرة", value=f"{creator_obj.mention if creator_obj else 'غير معروف'}", inline=True)
-                    log_embed.add_field(name="💼 المشرف", value=f"{claimer_obj.mention if claimer_obj else 'مفيش'}", inline=True)
-                    log_embed.add_field(name="🗑️ اتنفت بواسطة", value=f"{closer_obj.mention}", inline=True)
-
-                    try:
-                        await log_chan.send(embed=log_embed, file=file)
-                    except:
-                        pass
-
-        try:
-            creator_id_val = ticket_data.get("user_id", interaction.user.id) if ticket_data else interaction.user.id
-            embed_rate = discord.Embed(title="⭐ تقييم الخدمة", description=f"يا <@{creator_id_val}> يرجى تقييم مستوى الدعم قبل إغلاق التذكرة:", color=0x2B2D31)
-            await interaction.response.send_message(embed=embed_rate, view=TicketRatingView(channel, creator_id_val), ephemeral=False)
-        except:
-            pass
+        # فتح المودال للإداري ليكتب سبب الحذف
+        await interaction.response.send_modal(DeleteReasonModal())
 
 
 # ==============================================================================
@@ -974,7 +997,6 @@ class EmbedColorChoiceView(discord.ui.View):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
         
-        # تم إصلاح الخطأ هنا بالتأكد من وجود مفتاح panels ودعمه تلقائياً
         guild_data = db.setdefault(guild_id_str, {})
         panels_data = guild_data.setdefault("panels", {})
         panel_data = panels_data.get(self.panel_name, {})
@@ -1250,7 +1272,6 @@ class PanelInfoModal(discord.ui.Modal):
         db = load_tickets_db()
         guild_id_str = str(interaction.guild.id)
         
-        # تم إصلاح الخطأ نهائياً هنا باستخدام setdefault لتفادي KeyError: 'panels'
         guild_data = db.setdefault(guild_id_str, {})
         guild_data.setdefault("active_tickets", {})
         guild_data.setdefault("closed_tickets_archive", [])
