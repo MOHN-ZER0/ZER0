@@ -290,8 +290,14 @@ class Step3XpValuesModal(discord.ui.Modal, title="⚙️ الخطوة 3: تحد�
             await interaction.response.send_message(embed=embed_err, ephemeral=True)
 
 class Step2XpMessageModal(discord.ui.Modal, title="💬 الخطوة 2: رسالة وشكل الترقية"):
+    guide_box = discord.ui.TextInput(
+        label="📌 المتغيرات المتاحة للاستخدام",
+        style=discord.TextStyle.paragraph,
+        default="• منشن العضو: {user}\n• مستوى العضو: {level}\nمثال: مبروك {user} وصولك للمستوى {level}! 🎉",
+        required=False
+    )
     msg_box = discord.ui.TextInput(
-        label="أدخل رسالة الترقية",
+        label="أدخل رسالة الترقية الجديدة",
         style=discord.TextStyle.paragraph,
         default="تهانينا يا {user}! لقد صعدت إلى مستوى {level}.",
         max_length=1000,
@@ -354,17 +360,7 @@ class Step2QueryView(discord.ui.View):
 
     @discord.ui.button(label="نعم، تعيين رسالة ترقية ✅", style=discord.ButtonStyle.success, custom_id="q_yes_msg_v7")
     async def yes_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        examples_embed = discord.Embed(
-            title="💡 أمثلة وشرح متغيرات رسالة الترقية",
-            description=(
-                "• لاستخدام منشن العضو: اكتب `{user}`\n"
-                "• لاستخدام رقم المستوى الجديد: اكتب `{level}`\n\n"
-                "📌 **مثال جاهز:**\n`مبروك يا {user} وصولك للمستوى {level} بنجاح! 🚀`"
-            ),
-            color=0x00AAFF
-        )
-        await interaction.response.send_message(embed=examples_embed, ephemeral=True)
-        await interaction.followup.send_modal(Step2XpMessageModal(self.cfg))
+        await interaction.response.send_modal(Step2XpMessageModal(self.cfg))
 
     @discord.ui.button(label="لا، لا أريد ❌", style=discord.ButtonStyle.secondary, custom_id="q_no_msg_v7")
     async def no_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -459,29 +455,39 @@ class MultiplierScopeView(discord.ui.View):
     async def scope_roles(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(SpecificRolesInputModal())
 
-class IgnoreCombinedModal(discord.ui.Modal, title="🚫 إدارة استثناءات الرومات والرتب"):
-    roles_box = discord.ui.TextInput(label="أيديهات الرتب المستبعدة (كل أيدي في سطر)", style=discord.TextStyle.paragraph, required=False)
-    channels_box = discord.ui.TextInput(label="أيديهات الرومات المستبعدة (كل أيدي في سطر)", style=discord.TextStyle.paragraph, required=False)
+class IgnoreRoleSelect(discord.ui.RoleSelect):
+    def __init__(self):
+        super().__init__(placeholder="اختر الرتب المراد استبعادها من الـ XP", min_values=1, max_values=10, custom_id="sel_ignore_role_v7")
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction):
         conn = sqlite3.connect(LEVELS_DB_FILE)
         cursor = conn.cursor()
-        
-        if self.roles_box.value:
-            for line in self.roles_box.value.strip().split("\n"):
-                if line.strip().isdigit():
-                    cursor.execute("INSERT OR IGNORE INTO ignored_roles (guild_id, role_id) VALUES (?, ?)", (interaction.guild.id, int(line.strip())))
-        
-        if self.channels_box.value:
-            for line in self.channels_box.value.strip().split("\n"):
-                if line.strip().isdigit():
-                    cursor.execute("INSERT OR IGNORE INTO ignored_channels (guild_id, channel_id) VALUES (?, ?)", (interaction.guild.id, int(line.strip())))
-        
+        for r in self.values:
+            cursor.execute("INSERT OR IGNORE INTO ignored_roles (guild_id, role_id) VALUES (?, ?)", (interaction.guild.id, r.id))
         conn.commit()
         conn.close()
-
         await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
-        await interaction.followup.send(embed=discord.Embed(title="✅ تم الحفظ", description="تم تحديث الاستثناءات بنجاح.", color=0x00FF88), ephemeral=True)
+        await interaction.followup.send(embed=discord.Embed(title="✅ تم الحفظ", description="تم استبعاد الرتب المحددة بنجاح.", color=0x00FF88), ephemeral=True)
+
+class IgnoreChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(placeholder="اختر الرومات المراد استبعادها من الـ XP", min_values=1, max_values=10, custom_id="sel_ignore_chan_v7")
+
+    async def callback(self, interaction: discord.Interaction):
+        conn = sqlite3.connect(LEVELS_DB_FILE)
+        cursor = conn.cursor()
+        for c in self.values:
+            cursor.execute("INSERT OR IGNORE INTO ignored_channels (guild_id, channel_id) VALUES (?, ?)", (interaction.guild.id, c.id))
+        conn.commit()
+        conn.close()
+        await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
+        await interaction.followup.send(embed=discord.Embed(title="✅ تم الحفظ", description="تم استبعاد الرومات المحددة بنجاح.", color=0x00FF88), ephemeral=True)
+
+class IgnoreSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(IgnoreRoleSelect())
+        self.add_item(IgnoreChannelSelect())
 
 class LevelsRewardModal(discord.ui.Modal, title="🎁 إضافة رول مكافأة"):
     lvl_box = discord.ui.TextInput(label="المستوى المطلوب", placeholder="5", max_length=5)
@@ -539,7 +545,7 @@ class LevelsAdminPanelView(discord.ui.View):
     async def ignore_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
-        await interaction.response.send_modal(IgnoreCombinedModal())
+        await interaction.response.send_message(embed=discord.Embed(title="🚫 استبعاد رومات أو رتب", description="اختر من القوائم أدناه مباشرة:", color=0x2B2D31), view=IgnoreSelectView(), ephemeral=True)
 
 class TopDurationSelect(discord.ui.Select):
     def __init__(self, current_duration="global"):
@@ -676,12 +682,13 @@ class UltimateLevelsCog(commands.Cog):
             conn.commit()
             conn.close()
 
+            # نظام الرتب التراكمية: منح الرتبة الجديدة دون إزالة الرتب القديمة
             role_rewards = cfg.get("role_rewards", {})
             assigned_roles = role_rewards.get(str(new_lvl), [])
             role_earned_str = ""
             for rid in assigned_roles:
                 r_target = member.guild.get_role(int(rid))
-                if r_target:
+                if r_target and r_target not in member.roles:
                     try:
                         await member.add_roles(r_target, reason=f"Level System: Reached level {new_lvl}")
                         role_earned_str += f"\n🎁 **المكافأة:** تم منحك رتبة {r_target.mention}"
@@ -755,8 +762,19 @@ class UltimateLevelsCog(commands.Cog):
         cursor.execute("SELECT xp, level, messages FROM user_stats WHERE guild_id = ? AND user_id = ?", (interaction.guild.id, target.id))
         row = cursor.fetchone()
         conn.close()
+        
         xp, lvl, msgs = row if row else (0, 0, 0)
-        embed = discord.Embed(title=f"📊 رانك العضو {target.display_name}", description=f"🏆 المستوى: `{lvl}`\n✨ النقاط: `{xp}`\n📝 الرسائل: `{msgs}`", color=0x2B2D31)
+        req_xp = int((lvl + 1) * 300 + (lvl ** 1.2 * 120))
+        
+        embed = discord.Embed(
+            title=f"📊 رانك العضو {target.display_name}",
+            color=0x2B2D31
+        )
+        embed.set_thumbnail(url=target.display_avatar.url)
+        embed.add_field(name="🏆 المستوى", value=f"`{lvl}`", inline=True)
+        embed.add_field(name="✨ النقاط (XP)", value=f"`{xp} / {req_xp}`", inline=True)
+        embed.add_field(name="📝 الرسائل", value=f"`{msgs}`", inline=True)
+        
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="setup_levels", description="[الإدارة] لوحة تحكم المستويات الشاملة")
