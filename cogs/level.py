@@ -545,7 +545,7 @@ class TopLeaderboardView(discord.ui.View):
             self.page -= 1
             await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
-    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_my_v7", custom_id_placeholder="t_my_v7")
+    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_my_v7")
     async def my_rank_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.guild = interaction.guild
         rows = self.fetch_data()
