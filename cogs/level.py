@@ -17,9 +17,9 @@ def init_levels_db():
             guild_id INTEGER PRIMARY KEY,
             status INTEGER DEFAULT 1,
             announcement_channel INTEGER,
+            logs_channel INTEGER,
             msg_type TEXT DEFAULT 'text',
-            level_message TEXT DEFAULT 'تهانينا يا {user}! لقد صعدت إلى مستوى جديد، استمر في تفاعلك الرائع!',
-            level_embed_title TEXT DEFAULT '♦ ترقية إلى المستوى [{level}]',
+            level_message TEXT DEFAULT 'يا هلا يا {user}! لقد صعدت إلى المستوى {level} بنجاح، استمر في تفاعلك الجامد!',
             level_image TEXT,
             dm_notifications INTEGER DEFAULT 0,
             text_xp_enabled INTEGER DEFAULT 1,
@@ -39,7 +39,11 @@ def init_levels_db():
             event_target_roles TEXT DEFAULT 'all',
             periodic_reward_role INTEGER,
             periodic_type TEXT DEFAULT 'week',
-            last_weekly_reset INTEGER DEFAULT 0
+            last_weekly_reset INTEGER DEFAULT 0,
+            inactivity_decay_enabled INTEGER DEFAULT 0,
+            shortcut_level TEXT DEFAULT 'l',
+            shortcut_top TEXT DEFAULT 't',
+            shortcut_rewards TEXT DEFAULT 'r'
         )
     """)
     
@@ -69,12 +73,11 @@ def init_levels_db():
             messages INTEGER DEFAULT 0,
             voice_minutes INTEGER DEFAULT 0,
             voice_xp INTEGER DEFAULT 0,
+            reaction_xp INTEGER DEFAULT 0,
             day_text_xp INTEGER DEFAULT 0,
-            day_voice_xp INTEGER DEFAULT 0,
             week_text_xp INTEGER DEFAULT 0,
-            week_voice_xp INTEGER DEFAULT 0,
             month_text_xp INTEGER DEFAULT 0,
-            month_voice_xp INTEGER DEFAULT 0,
+            last_active_timestamp INTEGER DEFAULT 0,
             PRIMARY KEY (guild_id, user_id)
         )
     """)
@@ -88,12 +91,13 @@ def get_levels_settings(guild_id: int):
     conn = sqlite3.connect(LEVELS_DB_FILE)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT status, announcement_channel, msg_type, level_message, level_embed_title, level_image, dm_notifications,
+        SELECT status, announcement_channel, logs_channel, msg_type, level_message, level_embed_title, level_image, dm_notifications,
                text_xp_enabled, min_text_xp, max_text_xp, text_cooldown,
                voice_xp_enabled, min_voice_xp, max_voice_xp, voice_cooldown,
                reaction_xp_enabled, min_reaction_xp, max_reaction_xp,
                event_multiplier, event_type, event_end_timestamp, event_target_roles,
-               periodic_reward_role, periodic_type
+               periodic_reward_role, periodic_type, inactivity_decay_enabled,
+               shortcut_level, shortcut_top, shortcut_rewards
         FROM server_settings WHERE guild_id = ?
     """, (guild_id,))
     row = cursor.fetchone()
@@ -102,12 +106,13 @@ def get_levels_settings(guild_id: int):
         cursor.execute("INSERT INTO server_settings (guild_id) VALUES (?)", (guild_id,))
         conn.commit()
         cursor.execute("""
-            SELECT status, announcement_channel, msg_type, level_message, level_embed_title, level_image, dm_notifications,
+            SELECT status, announcement_channel, logs_channel, msg_type, level_message, level_embed_title, level_image, dm_notifications,
                    text_xp_enabled, min_text_xp, max_text_xp, text_cooldown,
                    voice_xp_enabled, min_voice_xp, max_voice_xp, voice_cooldown,
                    reaction_xp_enabled, min_reaction_xp, max_reaction_xp,
                    event_multiplier, event_type, event_end_timestamp, event_target_roles,
-                   periodic_reward_role, periodic_type
+                   periodic_reward_role, periodic_type, inactivity_decay_enabled,
+                   shortcut_level, shortcut_top, shortcut_rewards
             FROM server_settings WHERE guild_id = ?
         """, (guild_id,))
         row = cursor.fetchone()
@@ -141,28 +146,33 @@ def get_levels_settings(guild_id: int):
     return {
         "status": bool(row[0]),
         "announcement_channel": row[1],
-        "msg_type": row[2] if row[2] else "text",
-        "level_message": row[3],
-        "level_embed_title": row[4],
-        "level_image": row[5],
-        "dm_notifications": bool(row[6]),
-        "text_xp_enabled": bool(row[7]),
-        "min_text_xp": row[8],
-        "max_text_xp": row[9],
-        "text_cooldown": row[10],
-        "voice_xp_enabled": bool(row[11]),
-        "min_voice_xp": row[12],
-        "max_voice_xp": row[13],
-        "voice_cooldown": row[14],
-        "reaction_xp_enabled": bool(row[15]),
-        "min_reaction_xp": row[16],
-        "max_reaction_xp": row[17],
-        "event_multiplier": row[18],
-        "event_type": row[19],
-        "event_end_timestamp": row[20],
-        "event_target_roles": row[21] if len(row) > 21 else "all",
-        "periodic_reward_role": row[22] if len(row) > 22 else None,
-        "periodic_type": row[23] if len(row) > 23 else "week",
+        "logs_channel": row[2] if len(row) > 2 else None,
+        "msg_type": row[3] if row[3] else "text",
+        "level_message": row[4],
+        "level_embed_title": row[5],
+        "level_image": row[6],
+        "dm_notifications": bool(row[7]),
+        "text_xp_enabled": bool(row[8]),
+        "min_text_xp": row[9],
+        "max_text_xp": row[10],
+        "text_cooldown": row[11],
+        "voice_xp_enabled": bool(row[12]),
+        "min_voice_xp": row[13],
+        "max_voice_xp": row[14],
+        "voice_cooldown": row[15],
+        "reaction_xp_enabled": bool(row[16]),
+        "min_reaction_xp": row[17],
+        "max_reaction_xp": row[18],
+        "event_multiplier": row[19],
+        "event_type": row[20],
+        "event_end_timestamp": row[21],
+        "event_target_roles": row[22],
+        "periodic_reward_role": row[23],
+        "periodic_type": row[24],
+        "inactivity_decay_enabled": bool(row[25]) if len(row) > 25 else False,
+        "shortcut_level": row[26] if len(row) > 26 and row[26] else "l",
+        "shortcut_top": row[27] if len(row) > 27 and row[27] else "t",
+        "shortcut_rewards": row[28] if len(row) > 28 and row[28] else "r",
         "role_rewards": role_rewards,
         "ignored_roles": ignored_roles,
         "ignored_channels": ignored_channels,
@@ -181,50 +191,114 @@ def update_levels_setting(guild_id: int, column: str, value):
 
 def generate_levels_panel_embed(guild: discord.Guild):
     cfg = get_levels_settings(guild.id)
-    status_str = "مفعّل 🟢" if cfg["status"] else "متوقف 🔴"
-    chan_disp = f"<#{cfg['announcement_channel']}>" if cfg['announcement_channel'] else "القناة الافتراضية 💬"
+    status_str = "شغال `🟢`" if cfg["status"] else "متوقف `🔴`"
+    chan_disp = f"<#{cfg['announcement_channel']}>" if cfg['announcement_channel'] else "`غير محددة` 📌"
+    logs_disp = f"<#{cfg['logs_channel']}>" if cfg['logs_channel'] else "`غير محددة` 📌"
+    decay_str = "مفعل `✅`" if cfg['inactivity_decay_enabled'] else "مقفول `❌`"
     
     if cfg["event_multiplier"] > 1.0 and cfg["event_end_timestamp"] > time.time():
         target_str = "السيرفر بالكامل" if cfg["event_target_roles"] == "all" else "رتب محددة 🎯"
         event_str = f"`x{cfg['event_multiplier']}` | المدى: {target_str}"
     else:
-        event_str = "لا يوجد حدث عام نشط ⚪"
+        event_str = "`لا يوجد حدث نشط` ⚪"
     
-    periodic_disp = f"<@&{cfg['periodic_reward_role']}> ({cfg['periodic_type'].upper()})" if cfg['periodic_reward_role'] else "غير مفعّلة ⚪"
+    periodic_disp = f"<@&{cfg['periodic_reward_role']}> ({cfg['periodic_type'].upper()})" if cfg['periodic_reward_role'] else "`غير مفعلة` ⚪"
     
+    text_status = "شغال `✅`" if cfg['text_xp_enabled'] else "مقفول `❌`"
+    voice_status = "شغال `✅`" if cfg['voice_xp_enabled'] else "مقفول `❌`"
+    reaction_status = "شغال `✅`" if cfg['reaction_xp_enabled'] else "مقفول `❌`"
+
+    shortcuts_str = f"الليفل: `{cfg['shortcut_level']}` | التوب: `{cfg['shortcut_top']}` | المكافآت: `{cfg['shortcut_rewards']}`"
+
+    desc = (
+        "> **أهلاً بك يا فنان في لوحة التحكم المركزية لنظام التفاعل بالسيرفر.** 📊\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "### 🌐 ┃ الحالة العامة للنظام\n"
+        f"> * **حالة النظام:** {status_str}\n"
+        f"> * **قناة الإعلانات:** {chan_disp}\n"
+        f"> * **قناة السجلات (Log):** {logs_disp}\n"
+        f"> * **طرد المتخاذلين (5 أيام):** {decay_str}\n"
+        f"> * **المضاعف العام:** {event_str}\n"
+        f"> * **مكافأة التفاعل الدوري:** {periodic_disp}\n"
+        f"> * **الاختصارات الحالية:** {shortcuts_str}\n\n"
+        "### ⚙️ ┃ أنظمة الـ XP الفعالة\n"
+        f"> * 💬 **الرسائل النصية:** {text_status} ┊ النطاق: [ `**{cfg['min_text_xp']} - {cfg['max_text_xp']} XP**` ]\n"
+        f"> * 🔊 **الرومات الصوتية:** {voice_status} ┊ النطاق: [ `**{cfg['min_voice_xp']} - {cfg['max_voice_xp']} XP**` ]\n"
+        f"> * ⭐ **الرياكشنات:** {reaction_status} ┊ النطاق: [ `**{cfg['min_reaction_xp']} - {cfg['max_reaction_xp']} XP**` ]\n\n"
+        "### 🚫 ┃ الاستثناءات والمكافآت\n"
+        f"> * 👥 **الرتب المستبعدة:** [ `{len(cfg['ignored_roles'])}` ] رتبة\n"
+        f"> * 📁 **الرومات المستبعدة:** [ `{len(cfg['ignored_channels'])}` ] روم\n"
+        f"> * 🎁 **رتب المكافآت الثابتة:** [ `{sum(len(v) for v in cfg['role_rewards'].values())}` ] رتبة\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+
     embed = discord.Embed(
-        title="⚙️ [ ] : لوحة تحكم نظام المستويات الشاملة",
-        description=(
-            "مرحباً بك في لوحة الإدارة المركزية لنظام التفاعل والمستويات.\n\n"
-            f"• **حالة النظام العامة:** {status_str}\n"
-            f"• **قناة إعلانات الترقية:** {chan_disp}\n"
-            f"• **نظام المضاعف العام:** {event_str}\n"
-            f"• **رتبة مكافأة التفاعل الدوري:** {periodic_disp}\n\n"
-            f"⚙️ **أنظمة الـ XP الفعالة:**\n"
-            f"┗ **النص:** `{'مفعل ✅' if cfg['text_xp_enabled'] else 'معطل ❌'}` | النطاق: `{cfg['min_text_xp']}-{cfg['max_text_xp']}` XP\n"
-            f"┗ **الصوت:** `{'مفعل ✅' if cfg['voice_xp_enabled'] else 'معطل ❌'}` | النطاق: `{cfg['min_voice_xp']}-{cfg['max_voice_xp']}` XP\n"
-            f"┗ **الرياكشنت:** `{'مفعل ✅' if cfg['reaction_xp_enabled'] else 'معطل ❌'}` | النطاق: `{cfg['min_reaction_xp']}-{cfg['max_reaction_xp']}` XP\n\n"
-            f"🚫 **الاستثناءات والمكافآت:**\n"
-            f"┗ **رولات مستبعدة:** `{len(cfg['ignored_roles'])}` | **قنوات مستبعدة:** `{len(cfg['ignored_channels'])}`\n"
-            f"┗ **رولات المكافآت الثابتة:** `{sum(len(v) for v in cfg['role_rewards'].values())}` رتبة\n"
-        ),
+        title="⚡ ‹ لوحة التفاعل والمستويات › ⚡",
+        description=desc,
         color=0x2B2D31,
         timestamp=datetime.datetime.utcnow()
     )
-    embed.set_footer(text="نظام إدارة المستويات والتفاعل الفائق")
+    embed.set_footer(text="نظبط لك السيرفر بأعلى جودة يا غالي 🚀")
     return embed
+
+class SystemShortcutsModal(discord.ui.Modal, title="⚡ تحديد اختصارات الأوامر"):
+    level_sc = discord.ui.TextInput(label="اختصار أمر الليفل (مثال: l)", default="l", max_length=15, required=True)
+    top_sc = discord.ui.TextInput(label="اختصار أمر التوب (مثال: t)", default="t", max_length=15, required=True)
+    rewards_sc = discord.ui.TextInput(label="اختصار أمر المكافآت (مثال: r)", default="r", max_length=15, required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        l_val = self.level_sc.value.strip().lower()
+        t_val = self.top_sc.value.strip().lower()
+        r_val = self.rewards_sc.value.strip().lower()
+
+        update_levels_setting(interaction.guild.id, "shortcut_level", l_val)
+        update_levels_setting(interaction.guild.id, "shortcut_top", t_val)
+        update_levels_setting(interaction.guild.id, "shortcut_rewards", r_val)
+
+        await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
+        await interaction.followup.send(embed=discord.Embed(title="✅ تم تظبيط الاختصارات", description=f"تم حفظ الاختصارات بنجاح:\n• **بطاقة الليفل:** `{l_val}`\n• **قائمة التوب:** `{t_val}`\n• **جدول المكافآت:** `{r_val}`", color=0x00FF88), ephemeral=True)
+
+class SystemStateModal(discord.ui.Modal, title="🔄 تفعيل/إيقاف أنظمة المستويات"):
+    sys_status = discord.ui.TextInput(label="حالة النظام العامة (مفعل / غير مفعل)", default="مفعل", max_length=10, required=True)
+    text_status = discord.ui.TextInput(label="الترقيات النصية (مفعل / غير مفعل)", default="مفعل", max_length=10, required=True)
+    voice_status = discord.ui.TextInput(label="الترقيات الصوتية (مفعل / غير مفعل)", default="مفعل", max_length=10, required=True)
+    react_status = discord.ui.TextInput(label="ترقيات الريأكشن (مفعل / غير مفعل)", default="غير مفعل", max_length=10, required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        sys_val = 1 if "مفعل" in self.sys_status.value.strip().lower() and "غير" not in self.sys_status.value.strip().lower() else 0
+        txt_val = 1 if "مفعل" in self.text_status.value.strip().lower() and "غير" not in self.text_status.value.strip().lower() else 0
+        vce_val = 1 if "مفعل" in self.voice_status.value.strip().lower() and "غير" not in self.voice_status.value.strip().lower() else 0
+        rct_val = 1 if "مفعل" in self.react_status.value.strip().lower() and "غير" not in self.react_status.value.strip().lower() else 0
+
+        update_levels_setting(interaction.guild.id, "status", sys_val)
+        update_levels_setting(interaction.guild.id, "text_xp_enabled", txt_val)
+        update_levels_setting(interaction.guild.id, "voice_xp_enabled", vce_val)
+        update_levels_setting(interaction.guild.id, "reaction_xp_enabled", rct_val)
+
+        await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
+        await interaction.followup.send(embed=discord.Embed(title="✅ تم التعديل بنجاح", description="تم تحديث حالات تفعيل وتشغيل الأقسام بالكامل.", color=0x00FF88), ephemeral=True)
 
 class AnnouncementChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
-        super().__init__(placeholder="📢 اختر قناة إعلانات الترقية", channel_types=[discord.ChannelType.text], min_values=1, max_values=1, custom_id="sel_announce_chan_v7")
+        super().__init__(placeholder="📢 اختر قناة إعلانات الترقية", channel_types=[discord.ChannelType.text], min_values=1, max_values=1, custom_id="sel_announce_chan_v10")
 
     async def callback(self, interaction: discord.Interaction):
         selected_chan = self.values[0]
         update_levels_setting(interaction.guild.id, "announcement_channel", selected_chan.id)
         await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
-        await interaction.followup.send(embed=discord.Embed(title="✅ تم تحديد القناة", description=f"تم تعيين قناة إعلانات الترقية إلى {selected_chan.mention} بنجاح.", color=0x00FF88), ephemeral=True)
+        await interaction.followup.send(embed=discord.Embed(title="✅ تمام التمام", description=f"تم تعيين قناة الإعلانات لـ {selected_chan.mention} بنجاح.", color=0x00FF88), ephemeral=True)
 
-class Step3XpValuesModal(discord.ui.Modal, title="⚙️ تحديد نقاط الـ XP"):
+class LogsChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(placeholder="📋 اختر قناة السجلات (Logs)", channel_types=[discord.ChannelType.text], min_values=1, max_values=1, custom_id="sel_logs_chan_v10")
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_chan = self.values[0]
+        update_levels_setting(interaction.guild.id, "logs_channel", selected_chan.id)
+        await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
+        await interaction.followup.send(embed=discord.Embed(title="✅ زي الفل", description=f"تم تعيين قناة السجلات إلى {selected_chan.mention} بنجاح.", color=0x00FF88), ephemeral=True)
+
+class Step3XpValuesModal(discord.ui.Modal, title="⚙️ ضبط نقاط الـ XP"):
     text_min = discord.ui.TextInput(label="أدنى XP نصي", default="5", max_length=5)
     text_max = discord.ui.TextInput(label="أقصى XP نصي", default="45", max_length=5)
     voice_min = discord.ui.TextInput(label="أدنى XP صوتي", default="2", max_length=5)
@@ -238,23 +312,29 @@ class Step3XpValuesModal(discord.ui.Modal, title="⚙️ تحديد نقاط ا�
             update_levels_setting(interaction.guild.id, "max_voice_xp", int(self.voice_max.value))
 
             await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
-            await interaction.followup.send(embed=discord.Embed(title="✅ تم التعديل بنجاح", description="تم تحديث نطاق نقاط الـ XP بنجاح.", color=0x00FF88), ephemeral=True)
+            await interaction.followup.send(embed=discord.Embed(title="✅ زي الفل", description="تم تحديث نطاق نقاط الـ XP بنجاح.", color=0x00FF88), ephemeral=True)
         except ValueError:
-            await interaction.response.send_message(embed=discord.Embed(title="❌ خطأ", description="يرجى إدخال أرقام صحيحة فقط في نطاق النقاط.", color=0xFF3333), ephemeral=True)
+            await interaction.response.send_message(embed=discord.Embed(title="❌ يا أسطى ركز", description="حط أرقام صحيحة في خانات النقاط.", color=0xFF3333), ephemeral=True)
 
-class Step2XpMessageModal(discord.ui.Modal, title="💬 رسالة وشكل الترقية"):
+class Step2XpMessageModal(discord.ui.Modal, title="💬 رسالة وصورة الترقية"):
     msg_box = discord.ui.TextInput(
-        label="أدخل رسالة الترقية الجديدة",
+        label="اكتب رسالة الترقية الجديدة",
         style=discord.TextStyle.paragraph,
-        default="تهانينا يا {user}! لقد صعدت إلى مستوى {level}.",
+        default="يا هلا يا {user}! لقد صعدت إلى المستوى {level} بنجاح.",
         max_length=1000,
         required=True
     )
     type_box = discord.ui.TextInput(
-        label="نوع الرسالة (أكتب: embed أو text)",
+        label="نوع الرسالة (embed أو text)",
         default="text",
         max_length=10,
         required=True
+    )
+    image_box = discord.ui.TextInput(
+        label="رابط صورة الترقية (اختياري)",
+        placeholder="https://example.com/image.png",
+        max_length=300,
+        required=False
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -264,9 +344,10 @@ class Step2XpMessageModal(discord.ui.Modal, title="💬 رسالة وشكل ال
 
         update_levels_setting(interaction.guild.id, "level_message", self.msg_box.value)
         update_levels_setting(interaction.guild.id, "msg_type", m_type)
+        update_levels_setting(interaction.guild.id, "level_image", self.image_box.value.strip() if self.image_box.value else None)
 
         await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
-        await interaction.followup.send(embed=discord.Embed(title="✅ تم التعديل", description="تم حفظ رسالة ونوع الترقية بنجاح.", color=0x00FF88), ephemeral=True)
+        await interaction.followup.send(embed=discord.Embed(title="✅ تسلم إيدك", description="تم حفظ رسالة وصورة الترقية بنجاح.", color=0x00FF88), ephemeral=True)
 
 class MultiplierValueModal(discord.ui.Modal, title="⚡ تعيين قيمة المضاعف"):
     mult_box = discord.ui.TextInput(label="قيمة المضاعف (مثال: 1.5 أو 2 أو 3.5)", default="2.0", max_length=5, required=True)
@@ -298,13 +379,13 @@ class MultiplierValueModal(discord.ui.Modal, title="⚡ تعيين قيمة ال
             conn.commit()
             conn.close()
 
-            await interaction.response.send_message(embed=discord.Embed(title="✅ تم الحفظ بنجاح", description=f"تم تعيين مضاعف بقيمة `x{val}` بنجاح!", color=0x00FF88), ephemeral=True)
+            await interaction.response.send_message(embed=discord.Embed(title="✅ تم يا باشا", description=f"خلاص، تم تظبيط المضاعف على `x{val}` بنجاح!", color=0x00FF88), ephemeral=True)
         except ValueError:
-            await interaction.response.send_message(embed=discord.Embed(title="❌ خطأ", description="يرجى إدخال قيمة صحيحة بين 1.0 و 5.0", color=0xFF3333), ephemeral=True)
+            await interaction.response.send_message(embed=discord.Embed(title="❌ خطأ", description="يا غالي دخل قيمة صحيحة بين 1.0 و 5.0", color=0xFF3333), ephemeral=True)
 
 class SelectUsersForMultiplier(discord.ui.UserSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الأعضاء لتطبيق المضاعف عليهم", min_values=1, max_values=10, custom_id="sel_mult_users_v7")
+        super().__init__(placeholder="اختر الأعضاء لتطبيق المضاعف عليهم", min_values=1, max_values=10, custom_id="sel_mult_users_v10")
 
     async def callback(self, interaction: discord.Interaction):
         u_ids = [u.id for u in self.values]
@@ -312,7 +393,7 @@ class SelectUsersForMultiplier(discord.ui.UserSelect):
 
 class SelectRolesForMultiplier(discord.ui.RoleSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الرتب لتطبيق المضاعف عليها", min_values=1, max_values=10, custom_id="sel_mult_roles_v7")
+        super().__init__(placeholder="اختر الرتب لتطبيق المضاعف عليها", min_values=1, max_values=10, custom_id="sel_mult_roles_v10")
 
     async def callback(self, interaction: discord.Interaction):
         r_ids = [r.id for r in self.values]
@@ -320,7 +401,7 @@ class SelectRolesForMultiplier(discord.ui.RoleSelect):
 
 class SelectChannelsForMultiplier(discord.ui.ChannelSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الرومات لتطبيق المضاعف عليها", min_values=1, max_values=10, custom_id="sel_mult_chans_v7")
+        super().__init__(placeholder="اختر الرومات لتطبيق المضاعف عليها", min_values=1, max_values=10, custom_id="sel_mult_chans_v10")
 
     async def callback(self, interaction: discord.Interaction):
         c_ids = [c.id for c in self.values]
@@ -330,27 +411,27 @@ class MultiplierTypeSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="مضاعف لأعضاء 👤", style=discord.ButtonStyle.primary, custom_id="m_type_user_v7")
+    @discord.ui.button(label="مضاعف لأعضاء 👤", style=discord.ButtonStyle.primary, custom_id="m_type_user_v10")
     async def mult_user(self, interaction: discord.Interaction, button: discord.ui.Button):
         v = discord.ui.View(timeout=60)
         v.add_item(SelectUsersForMultiplier())
-        await interaction.response.send_message(embed=discord.Embed(title="👤 اختر الأعضاء", description="حدد الأعضاء من القائمة أدناه:", color=0x2B2D31), view=v, ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(title="👤 اختر الأعضاء", description="حدد الشخص من القائمة يا فنان:", color=0x2B2D31), view=v, ephemeral=True)
 
-    @discord.ui.button(label="مضاعف لرتب 🛡️", style=discord.ButtonStyle.secondary, custom_id="m_type_role_v7")
+    @discord.ui.button(label="مضاعف لرتب 🛡️", style=discord.ButtonStyle.secondary, custom_id="m_type_role_v10")
     async def mult_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         v = discord.ui.View(timeout=60)
         v.add_item(SelectRolesForMultiplier())
-        await interaction.response.send_message(embed=discord.Embed(title="🛡️ اختر الرتب", description="حدد الرتب من القائمة أدناه:", color=0x2B2D31), view=v, ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(title="🛡️ اختر الرتب", description="حدد الرتبة من القائمة يا غالي:", color=0x2B2D31), view=v, ephemeral=True)
 
-    @discord.ui.button(label="مضاعف لرومات 💬/🎙️", style=discord.ButtonStyle.success, custom_id="m_type_chan_v7")
+    @discord.ui.button(label="مضاعف لرومات 💬/🎙️", style=discord.ButtonStyle.success, custom_id="m_type_chan_v10")
     async def mult_chan(self, interaction: discord.Interaction, button: discord.ui.Button):
         v = discord.ui.View(timeout=60)
         v.add_item(SelectChannelsForMultiplier())
-        await interaction.response.send_message(embed=discord.Embed(title="💬 اختر الرومات", description="حدد الرومات من القائمة أدناه:", color=0x2B2D31), view=v, ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(title="💬 اختر الرومات", description="حدد الروم من القائمة يا معلم:", color=0x2B2D31), view=v, ephemeral=True)
 
 class IgnoreRoleSelect(discord.ui.RoleSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الرتب المراد استبعادها من الـ XP", min_values=1, max_values=10, custom_id="sel_ignore_role_v7")
+        super().__init__(placeholder="اختر الرتب المراد استبعادها من الـ XP", min_values=1, max_values=10, custom_id="sel_ignore_role_v10")
 
     async def callback(self, interaction: discord.Interaction):
         conn = sqlite3.connect(LEVELS_DB_FILE)
@@ -360,11 +441,11 @@ class IgnoreRoleSelect(discord.ui.RoleSelect):
         conn.commit()
         conn.close()
         await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
-        await interaction.followup.send(embed=discord.Embed(title="✅ تم الحفظ", description="تم استبعاد الرتب المحددة بنجاح.", color=0x00FF88), ephemeral=True)
+        await interaction.followup.send(embed=discord.Embed(title="✅ تم الاستبعاد", description="خلاص، تم استبعاد الرتب المحددة.", color=0x00FF88), ephemeral=True)
 
 class IgnoreChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الرومات المراد استبعادها من الـ XP", min_values=1, max_values=10, custom_id="sel_ignore_chan_v7")
+        super().__init__(placeholder="اختر الرومات المراد استبعادها من الـ XP", min_values=1, max_values=10, custom_id="sel_ignore_chan_v10")
 
     async def callback(self, interaction: discord.Interaction):
         conn = sqlite3.connect(LEVELS_DB_FILE)
@@ -374,7 +455,7 @@ class IgnoreChannelSelect(discord.ui.ChannelSelect):
         conn.commit()
         conn.close()
         await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
-        await interaction.followup.send(embed=discord.Embed(title="✅ تم الحفظ", description="تم استبعاد الرومات المحددة بنجاح.", color=0x00FF88), ephemeral=True)
+        await interaction.followup.send(embed=discord.Embed(title="✅ تم الاستبعاد", description="خلاص، تم استبعاد الرومات المحددة.", color=0x00FF88), ephemeral=True)
 
 class IgnoreSelectView(discord.ui.View):
     def __init__(self):
@@ -387,11 +468,16 @@ class AnnouncementView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(AnnouncementChannelSelect())
 
+class LogsChannelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(LogsChannelSelect())
+
 class LevelsRewardModal(discord.ui.Modal, title="🎁 إضافة رول مكافأة"):
     role_box = discord.ui.TextInput(label="أيدي الرتبة (Role ID)", placeholder="1234567890", max_length=30, required=True)
     lvl_box = discord.ui.TextInput(label="المستوى المطلوب للحصول عليها", placeholder="5", max_length=5, required=True)
     type_box = discord.ui.TextInput(
-        label="نوع التفاعل المطلوب (نصي / صوتي / رياكشن / الكل)",
+        label="نوع التفاعل (نصي / صوتي / رياكشن / الكل)",
         default="الكل",
         placeholder="أكتب: نصي أو صوتي أو رياكشن أو الكل",
         max_length=15,
@@ -427,87 +513,124 @@ class LevelsRewardModal(discord.ui.Modal, title="🎁 إضافة رول مكاف
             conn.close()
 
             await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
-            await interaction.followup.send(embed=discord.Embed(title="✅ تم إضافة المكافأة", description=f"تم ربط المستوى `{lvl}` بالرتبة <@&{rid}>\n• **نوع التفاعل المطلوب:** {req_disp}", color=0x00FF88), ephemeral=True)
+            await interaction.followup.send(embed=discord.Embed(title="✅ يا سلام يا فنان", description=f"تم ربط المستوى `{lvl}` بالرتبة <@&{rid}>\n• **نوع التفاعل المطلوب:** {req_disp}", color=0x00FF88), ephemeral=True)
         except ValueError:
-            await interaction.response.send_message(embed=discord.Embed(title="❌ خطأ", description="تأكد من صحة البيانات وأيدي الرتبة.", color=0xFF3333), ephemeral=True)
+            await interaction.response.send_message(embed=discord.Embed(title="❌ خطأ يا فنان", description="تأكد من صحة أيدي الرتبة أو المستوى يا غالي.", color=0xFF3333), ephemeral=True)
 
 class LevelsAdminPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="تشغيل / إيقاف النظام", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="p_tgl_v7")
+    @discord.ui.button(label="تشغيل / إيقاف النظام", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="p_tgl_v10")
     async def toggle_sys(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
-        cfg = get_levels_settings(interaction.guild.id)
-        update_levels_setting(interaction.guild.id, "status", 0 if cfg["status"] else 1)
-        await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=self)
+        await interaction.response.send_modal(SystemStateModal())
 
-    @discord.ui.button(label="قناة إعلانات الترقية", style=discord.ButtonStyle.secondary, emoji="📢", row=0, custom_id="p_ann_chan_v7")
+    @discord.ui.button(label="تحديد الاختصارات ⚡", style=discord.ButtonStyle.primary, emoji="⌨️", row=0, custom_id="p_shortcuts_v10")
+    async def set_shortcuts_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return
+        await interaction.response.send_modal(SystemShortcutsModal())
+
+    @discord.ui.button(label="قناة إعلانات الترقية", style=discord.ButtonStyle.secondary, emoji="📢", row=0, custom_id="p_ann_chan_v10")
     async def set_announce_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_message(embed=discord.Embed(title="📢 قناة الإعلانات", description="اختر قناة إعلانات الترقية من القائمة أدناه:", color=0x2B2D31), view=AnnouncementView(), ephemeral=True)
 
-    @discord.ui.button(label="إعدادات الـ XP", style=discord.ButtonStyle.primary, emoji="⚙️", row=0, custom_id="p_xp_unified_v7")
+    @discord.ui.button(label="قناة السجلات (Logs)", style=discord.ButtonStyle.secondary, emoji="📋", row=1, custom_id="p_logs_chan_v10")
+    async def set_logs_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return
+        await interaction.response.send_message(embed=discord.Embed(title="📋 قناة السجلات", description="اختر قناة السجلات الإدارية من القائمة أدناه:", color=0x2B2D31), view=LogsChannelView(), ephemeral=True)
+
+    @discord.ui.button(label="إعدادات الـ XP", style=discord.ButtonStyle.primary, emoji="⚙️", row=1, custom_id="p_xp_unified_v10")
     async def xp_unified_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_modal(Step3XpValuesModal())
 
-    @discord.ui.button(label="مضاعفات الـ XP المخصصة", style=discord.ButtonStyle.success, emoji="⚡", row=1, custom_id="p_mult_custom_v7")
+    @discord.ui.button(label="مضاعفات الـ XP", style=discord.ButtonStyle.success, emoji="⚡", row=1, custom_id="p_mult_custom_v10")
     async def custom_mult_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_message(embed=discord.Embed(title="⚡ إدارة مضاعفات الـ XP", description="اختر الفئة المراد تطبيق المضاعف عليها:", color=0x2B2D31), view=MultiplierTypeSelectView(), ephemeral=True)
 
-    @discord.ui.button(label="رسالة الترقية", style=discord.ButtonStyle.secondary, emoji="💬", row=1, custom_id="p_msg_v7")
+    @discord.ui.button(label="رسالة الترقية", style=discord.ButtonStyle.secondary, emoji="💬", row=2, custom_id="p_msg_v10")
     async def msg_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_modal(Step2XpMessageModal())
 
-    @discord.ui.button(label="إضافة رول مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=1, custom_id="p_reward_v7")
+    @discord.ui.button(label="إضافة رول مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=2, custom_id="p_reward_v10")
     async def reward_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_modal(LevelsRewardModal())
 
-    @discord.ui.button(label="استبعاد روم أو رول", style=discord.ButtonStyle.danger, emoji="🚫", row=2, custom_id="p_ignore_combined_v7")
+    @discord.ui.button(label="نظام طرد المتخاذلين (5 أيام)", style=discord.ButtonStyle.blurple, emoji="🧹", row=2, custom_id="p_decay_v10")
+    async def decay_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return
+        cfg = get_levels_settings(interaction.guild.id)
+        new_val = 0 if cfg["inactivity_decay_enabled"] else 1
+        update_levels_setting(interaction.guild.id, "inactivity_decay_enabled", new_val)
+        await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=self)
+
+    @discord.ui.button(label="استبعاد روم أو رول", style=discord.ButtonStyle.danger, emoji="🚫", row=2, custom_id="p_ignore_combined_v10")
     async def ignore_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_message(embed=discord.Embed(title="🚫 استبعاد رومات أو رتب", description="اختر من القوائم أدناه مباشرة:", color=0x2B2D31), view=IgnoreSelectView(), ephemeral=True)
 
-class TopDurationSelect(discord.ui.Select):
-    def __init__(self, current_duration="global"):
+class TopTypeSelect(discord.ui.Select):
+    def __init__(self, current_type="text"):
         options = [
-            discord.SelectOption(label="Global / العالمي", value="global", emoji="🌐", default=(current_duration == "global")),
-            discord.SelectOption(label="Day / اليومي", value="day", emoji="📅", default=(current_duration == "day")),
-            discord.SelectOption(label="Week / أسبوعي", value="week", emoji="🗓️", default=(current_duration == "week")),
-            discord.SelectOption(label="Month / شهري", value="month", emoji="📆", default=(current_duration == "month")),
+            discord.SelectOption(label="النصي / Text XP", value="text", emoji="💬", default=(current_type == "text")),
+            discord.SelectOption(label="الصوتي / Voice XP", value="voice", emoji="🎙️", default=(current_type == "voice")),
+            discord.SelectOption(label="الرياكشن / Reactions", value="reaction", emoji="⭐", default=(current_type == "reaction")),
         ]
-        super().__init__(placeholder="Select duration / اختر فترة الترتيب", options=options, custom_id="top_sel_v7")
+        super().__init__(placeholder="اختر قسم الترتيب يا فنان", options=options, custom_id="top_type_sel_v10")
 
     async def callback(self, interaction: discord.Interaction):
         view: TopLeaderboardView = self.view
-        view.duration = self.values[0]
+        view.top_type = self.values[0]
+        view.page = 0
+        view.update_select()
+        await interaction.response.edit_message(embed=view.create_embed(), view=view)
+
+class TopTimeframeSelect(discord.ui.Select):
+    def __init__(self, current_timeframe="all"):
+        options = [
+            discord.SelectOption(label="الترتيب العام / All Time", value="all", emoji="🌐", default=(current_timeframe == "all")),
+            discord.SelectOption(label="اليومي / Daily", value="day", emoji="📅", default=(current_timeframe == "day")),
+            discord.SelectOption(label="الأسبوعي / Weekly", value="week", emoji="🗓️", default=(current_timeframe == "week")),
+            discord.SelectOption(label="الشهري / Monthly", value="month", emoji="📆", default=(current_timeframe == "month")),
+        ]
+        super().__init__(placeholder="اختر الفترة الزمنية للترتيب", options=options, custom_id="top_tf_sel_v10")
+
+    async def callback(self, interaction: discord.Interaction):
+        view: TopLeaderboardView = self.view
+        view.timeframe = self.values[0]
         view.page = 0
         view.update_select()
         await interaction.response.edit_message(embed=view.create_embed(), view=view)
 
 class TopLeaderboardView(discord.ui.View):
-    def __init__(self, interaction_guild=None, duration="global", page=0):
+    def __init__(self, interaction_guild=None, top_type="text", timeframe="all", page=0):
         super().__init__(timeout=None)
         self.guild = interaction_guild
-        self.duration = duration
+        self.top_type = top_type
+        self.timeframe = timeframe
         self.page = page
         self.per_page = 5
         self.update_select()
 
     def update_select(self):
         self.clear_items()
-        self.add_item(TopDurationSelect(self.duration))
+        self.add_item(TopTypeSelect(self.top_type))
+        self.add_item(TopTimeframeSelect(self.timeframe))
         self.add_item(self.prev_btn)
         self.add_item(self.my_rank_btn)
         self.add_item(self.next_btn)
@@ -515,86 +638,254 @@ class TopLeaderboardView(discord.ui.View):
     def fetch_data(self):
         if not self.guild:
             return []
+        cfg = get_levels_settings(self.guild.id)
         conn = sqlite3.connect(LEVELS_DB_FILE)
         cursor = conn.cursor()
-        if self.duration == "day":
-            cursor.execute("SELECT user_id, day_text_xp, level FROM user_stats WHERE guild_id = ? ORDER BY day_text_xp DESC", (self.guild.id,))
-        elif self.duration == "week":
-            cursor.execute("SELECT user_id, week_text_xp, level FROM user_stats WHERE guild_id = ? ORDER BY week_text_xp DESC", (self.guild.id,))
-        elif self.duration == "month":
-            cursor.execute("SELECT user_id, month_text_xp, level FROM user_stats WHERE guild_id = ? ORDER BY month_text_xp DESC", (self.guild.id,))
+        
+        time_limit = int(time.time()) - (5 * 86400) if cfg["inactivity_decay_enabled"] else 0
+
+        if self.top_type == "voice":
+            cursor.execute("SELECT user_id, voice_xp, level FROM user_stats WHERE guild_id = ? AND last_active_timestamp >= ? ORDER BY voice_xp DESC", (self.guild.id, time_limit))
+        elif self.top_type == "reaction":
+            cursor.execute("SELECT user_id, reaction_xp, level FROM user_stats WHERE guild_id = ? AND last_active_timestamp >= ? ORDER BY reaction_xp DESC", (self.guild.id, time_limit))
         else:
-            cursor.execute("SELECT user_id, xp, level FROM user_stats WHERE guild_id = ? ORDER BY xp DESC", (self.guild.id,))
+            if self.timeframe == "day":
+                cursor.execute("SELECT user_id, day_text_xp, level FROM user_stats WHERE guild_id = ? AND last_active_timestamp >= ? ORDER BY day_text_xp DESC", (self.guild.id, time_limit))
+            elif self.timeframe == "week":
+                cursor.execute("SELECT user_id, week_text_xp, level FROM user_stats WHERE guild_id = ? AND last_active_timestamp >= ? ORDER BY week_text_xp DESC", (self.guild.id, time_limit))
+            elif self.timeframe == "month":
+                cursor.execute("SELECT user_id, month_text_xp, level FROM user_stats WHERE guild_id = ? AND last_active_timestamp >= ? ORDER BY month_text_xp DESC", (self.guild.id, time_limit))
+            else:
+                cursor.execute("SELECT user_id, xp, level FROM user_stats WHERE guild_id = ? AND last_active_timestamp >= ? ORDER BY xp DESC", (self.guild.id, time_limit))
+        
         rows = cursor.fetchall()
         conn.close()
         return rows
 
+    def get_time_until_reset(self):
+        now = datetime.datetime.now()
+        target = now.replace(hour=12, minute=0, second=0, microsecond=0)
+        
+        if self.timeframe == "day":
+            if now >= target:
+                target += datetime.timedelta(days=1)
+        elif self.timeframe == "week":
+            days_ahead = 4 - now.weekday()
+            if days_ahead < 0 or (days_ahead == 0 and now >= target):
+                days_ahead += 7
+            target += datetime.timedelta(days=days_ahead)
+        elif self.timeframe == "month":
+            if now.month == 12:
+                next_month = now.replace(year=now.year + 1, month=1, day=1)
+            else:
+                next_month = now.replace(month=now.month + 1, day=1)
+            target = next_month - datetime.timedelta(days=1)
+            target = target.replace(hour=12, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target = next_month.replace(day=28)
+        else:
+            return ""
+
+        diff = target - now
+        hours, remainder = divmod(int(diff.total_seconds()), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f" ⏱️ (متبقي على التصفير: {hours} ساعة و {minutes} دقيقة)"
+
     def create_embed(self):
         if not self.guild:
             return discord.Embed(title="Top", color=0x2B2D31)
+        
+        cfg = get_levels_settings(self.guild.id)
         rows = self.fetch_data()
-        lines = []
-        for i, r in enumerate(rows[:5], 1):
-            lines.append(f"#{i}• <@{r[0]}>: {r[1]} XP")
-        return discord.Embed(title=f"📋 Top Leaderboard ({self.duration})", description="\n".join(lines) if lines else "لا توجد بيانات تفاعل.", color=0x2B2D31)
+        
+        start = self.page * self.per_page
+        end = start + self.per_page
+        current_rows = rows[start:end]
 
-    @discord.ui.button(style=discord.ButtonStyle.primary, emoji="◀", custom_id="t_prev_v7")
+        lines = []
+        for i, r in enumerate(current_rows, start + 1):
+            uid, xp_val, lvl_val = r[0], r[1], r[2]
+            
+            earned_roles = []
+            for l_str, r_list in cfg["role_rewards"].items():
+                if int(l_str) <= lvl_val:
+                    for item in r_list:
+                        r_obj = self.guild.get_role(item["role_id"])
+                        if r_obj:
+                            earned_roles.append(r_obj.mention)
+            
+            roles_str = f" ⟵ {' ، '.join(earned_roles)}" if earned_roles else ""
+            lines.append(f"#{i}• <@{uid}>: `{xp_val}` XP (ليفل {lvl_val}){roles_str}")
+        
+        title_map = {"text": "النصي 💬", "voice": "الصوتي 🎙️", "reaction": "الرياكشنات ⭐"}
+        reset_time_str = self.get_time_until_reset() if self.timeframe != "all" else ""
+        
+        embed = discord.Embed(
+            title=f"📋 قائمة المتصدرين ({title_map.get(self.top_type, 'النصي')}){reset_time_str}",
+            description="\n".join(lines) if lines else "لا توجد بيانات تفاعل في هذه الصفحة.",
+            color=0x2B2D31
+        )
+        embed.set_footer(text=f"الصفحة {self.page + 1} من {(len(rows) - 1) // self.per_page + 1 if rows else 1}")
+        return embed
+
+    @discord.ui.button(style=discord.ButtonStyle.primary, emoji="◀", custom_id="t_prev_v10")
     async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.guild = interaction.guild
         if self.page > 0:
             self.page -= 1
             await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
-    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.secondary, custom_id="t_my_v7")
+    @discord.ui.button(label="ترتيبي", style=discord.ButtonStyle.secondary, custom_id="t_my_v10")
     async def my_rank_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.guild = interaction.guild
         rows = self.fetch_data()
         pos = next((i for i, r in enumerate(rows, 1) if r[0] == interaction.user.id), None)
-        await interaction.response.send_message(embed=discord.Embed(title="📍 ترتيبك", description=f"ترتيبك: `#{pos}`" if pos else "ليس لديك تفاعل.", color=0x00FF88), ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(title="📍 ترتيبك", description=f"يا فنان، ترتيبك هو: `#{pos}`" if pos else "مش ظاهر في قائمة التوب حالياً.", color=0x00FF88), ephemeral=True)
 
-    @discord.ui.button(style=discord.ButtonStyle.primary, emoji="▶", custom_id="t_next_v7")
+    @discord.ui.button(style=discord.ButtonStyle.primary, emoji="▶", custom_id="t_next_v10")
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.guild = interaction.guild
-        self.page += 1
-        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        rows = self.fetch_data()
+        if (self.page + 1) * self.per_page < len(rows):
+            self.page += 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
 class UltimateLevelsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.voice_tracker.start()
-        self.weekly_reset_loop.start()
+        self.periodic_reset_loop.start()
 
     def cog_unload(self):
         self.voice_tracker.cancel()
-        self.weekly_reset_loop.cancel()
+        self.periodic_reset_loop.cancel()
 
     async def cog_load(self):
         self.bot.add_view(LevelsAdminPanelView())
         self.bot.add_view(TopLeaderboardView())
         self.bot.add_view(MultiplierTypeSelectView())
 
+    async def build_level_embed(self, guild: discord.Guild, target: discord.Member):
+        conn = sqlite3.connect(LEVELS_DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT xp, level, messages, voice_minutes FROM user_stats WHERE guild_id = ? AND user_id = ?", (guild.id, target.id))
+        row = cursor.fetchone()
+        
+        cursor.execute("SELECT user_id FROM user_stats WHERE guild_id = ? ORDER BY xp DESC", (guild.id,))
+        all_users = [r[0] for r in cursor.fetchall()]
+        rank = all_users.index(target.id) + 1 if target.id in all_users else "مش مضاف"
+        conn.close()
+
+        xp, lvl, msgs, v_mins = row if row else (0, 0, 0, 0)
+        req_xp = int((lvl + 1) * 300 + (lvl ** 1.2 * 120))
+        cfg = get_levels_settings(guild.id)
+
+        has_mult = "موجود 🟡" if cfg["event_multiplier"] > 1.0 else "مافيش ⚪"
+        
+        user_mult = 1.0
+        if target.id in cfg["user_multipliers"]:
+            user_mult = max(user_mult, cfg["user_multipliers"][target.id])
+        for rid, mult in cfg["role_multipliers"].items():
+            if any(r.id == rid for r in target.roles):
+                if mult > user_mult:
+                    user_mult = mult
+
+        earned_roles = []
+        for l_str, r_list in cfg["role_rewards"].items():
+            if int(l_str) <= lvl:
+                for item in r_list:
+                    r_obj = guild.get_role(item["role_id"])
+                    if r_obj:
+                        earned_roles.append(r_obj.mention)
+        
+        earned_roles_str = " ، ".join(earned_roles) if earned_roles else "لسه ما أخذتش رتب"
+
+        pct = min(1.0, xp / req_xp) if req_xp > 0 else 0
+        filled = int(pct * 12)
+        
+        if user_mult >= 5.0:
+            bar = "⬜" * filled + "⬛" * (12 - filled)
+        elif user_mult >= 4.5:
+            bar = "⬜🟨" * (filled // 2) + "🟨" * (filled % 2) + "⬛" * (12 - filled)
+        elif user_mult >= 4.0:
+            bar = "🟨" * filled + "⬛" * (12 - filled)
+        elif user_mult >= 3.5:
+            bar = "🟨🟧" * (filled // 2) + "🟧" * (filled % 2) + "⬛" * (12 - filled)
+        elif user_mult >= 3.0:
+            bar = "🟧" * filled + "⬛" * (12 - filled)
+        elif user_mult >= 2.5:
+            bar = "🟧🟥" * (filled // 2) + "🟥" * (filled % 2) + "⬛" * (12 - filled)
+        elif user_mult >= 2.0:
+            bar = "🟥" * filled + "⬛" * (12 - filled)
+        elif user_mult >= 1.5:
+            bar = "🟥🟩" * (filled // 2) + "🟩" * (filled % 2) + "⬛" * (12 - filled)
+        else:
+            bar = "🟩" * filled + "⬛" * (12 - filled)
+
+        mult_display = f"x{user_mult}" if user_mult > 1.0 else "x1.0"
+
+        embed = discord.Embed(color=0x2B2D31)
+        embed.set_author(name=f"📊 ‹ بطاقة إحصائيات ✦ {target.display_name} ›")
+        embed.set_thumbnail(url=target.display_avatar.url)
+
+        embed.add_field(name="🏆 ‹ المستوى الحالي ›", value=f"```\n{lvl}\n```", inline=False)
+        embed.add_field(name="✨ ‹ نقاط الـ XP ›", value=f"```\n{xp} / {req_xp}\n```", inline=False)
+        embed.add_field(name="📍 ‹ الترتيب بالسيرفر ›", value=f"```\n{rank}\n```", inline=False)
+        embed.add_field(name="⚡ ‹ مضاعف السيرفر ›", value=f"{has_mult}", inline=False)
+        embed.add_field(name="🛡️ ‹ مضاعفك الشخصي / رتبتك ›", value=f"```\n{mult_display}\n```", inline=False)
+        embed.add_field(name="📝 ‹ إجمالي رسائلك ›", value=f"```\n{msgs}\n```", inline=False)
+        embed.add_field(name="🎙️ ‹ دقائقك الصوتية ›", value=f"```\n{v_mins} دقيقة\n```", inline=False)
+        embed.add_field(name="🎁 ‹ رتب المكافآت المكتسبة ›", value=f"{earned_roles_str}", inline=False)
+        embed.add_field(name="📈 ‹ شريط التقدم ›", value=f"{bar}", inline=False)
+
+        embed.set_footer(text=f"نظام التفاعل والمستويات | {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
+        return embed
+
+    async def build_rewards_embed(self, guild: discord.Guild):
+        conn = sqlite3.connect(LEVELS_DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT level, role_id, req_type FROM role_rewards WHERE guild_id = ? ORDER BY level ASC", (guild.id,))
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            return discord.Embed(title="🎁 لوحة المكافآت", description="لم يتم تعديل أو إضافة أي رتب مكافآت في النظام حتى الآن.", color=0xFF3333)
+
+        lines = []
+        for r in rows:
+            lvl, rid, rtype = r[0], r[1], r[2]
+            lines.append(f"• **المستوى {lvl}** ⟵ <@&{rid}> (النوع: `{rtype}`)")
+
+        embed = discord.Embed(
+            title="🎁 ‹ جدول رتب المكافآت المتاحة بالسيرفر ›",
+            description="\n".join(lines),
+            color=0x2B2D31,
+            timestamp=datetime.datetime.utcnow()
+        )
+        embed.set_footer(text="تفاعل واستمر عشان تاخد كل الرتب دي يا فنان!")
+        return embed
+
     @tasks.loop(minutes=1)
-    async def weekly_reset_loop(self):
+    async def periodic_reset_loop(self):
         now = datetime.datetime.now()
-        if now.weekday() == 4 and now.hour == 12 and now.minute == 0:
+        if now.hour == 12 and now.minute == 0:
             conn = sqlite3.connect(LEVELS_DB_FILE)
             cursor = conn.cursor()
-            cursor.execute("SELECT DISTINCT guild_id FROM server_settings")
-            guilds = cursor.fetchall()
-            for g in guilds:
-                gid = g[0]
-                cursor.execute("SELECT last_weekly_reset FROM server_settings WHERE guild_id = ?", (gid,))
-                res = cursor.fetchone()
-                last_reset = res[0] if res else 0
-                today_date = int(now.strftime("%Y%m%d"))
-                if last_reset != today_date:
-                    cursor.execute("UPDATE user_stats SET week_text_xp = 0, week_voice_xp = 0 WHERE guild_id = ?", (gid,))
-                    cursor.execute("UPDATE server_settings SET last_weekly_reset = ? WHERE guild_id = ?", (today_date, gid))
+            
+            cursor.execute("UPDATE user_stats SET day_text_xp = 0")
+            
+            if now.weekday() == 4:
+                cursor.execute("UPDATE user_stats SET week_text_xp = 0")
+                
+            next_day = now + datetime.timedelta(days=1)
+            if next_day.day == 1:
+                cursor.execute("UPDATE user_stats SET month_text_xp = 0")
+
             conn.commit()
             conn.close()
 
-    @weekly_reset_loop.before_loop
-    async def before_weekly_reset(self):
+    @periodic_reset_loop.before_loop
+    async def before_periodic_reset(self):
         await self.bot.wait_until_ready()
 
     @tasks.loop(minutes=1)
@@ -622,14 +913,15 @@ class UltimateLevelsCog(commands.Cog):
                         mult = max(mult, cfg["channel_multipliers"][vc.id])
 
                     base_xp = int(random.randint(cfg["min_voice_xp"], cfg["max_voice_xp"]) * mult)
+                    now_ts = int(time.time())
                     conn = sqlite3.connect(LEVELS_DB_FILE)
                     cursor = conn.cursor()
-                    cursor.execute("SELECT xp, level, voice_minutes, week_voice_xp FROM user_stats WHERE guild_id = ? AND user_id = ?", (guild.id, m.id))
+                    cursor.execute("SELECT xp, level, voice_xp, voice_minutes FROM user_stats WHERE guild_id = ? AND user_id = ?", (guild.id, m.id))
                     row = cursor.fetchone()
                     if not row:
-                        cursor.execute("INSERT INTO user_stats (guild_id, user_id, xp, level, voice_minutes, week_voice_xp) VALUES (?, ?, ?, 0, 1, ?)", (guild.id, m.id, base_xp, base_xp))
+                        cursor.execute("INSERT INTO user_stats (guild_id, user_id, xp, level, voice_xp, voice_minutes, last_active_timestamp) VALUES (?, ?, ?, 0, ?, 1, ?)", (guild.id, m.id, base_xp, base_xp, now_ts))
                     else:
-                        cursor.execute("UPDATE user_stats SET xp = ?, voice_minutes = ?, week_voice_xp = ? WHERE guild_id = ? AND user_id = ?", (row[0] + base_xp, row[2] + 1, row[3] + base_xp, guild.id, m.id))
+                        cursor.execute("UPDATE user_stats SET xp = ?, voice_xp = ?, voice_minutes = ?, last_active_timestamp = ? WHERE guild_id = ? AND user_id = ?", (row[0] + base_xp, row[2] + base_xp, row[3] + 1, now_ts, guild.id, m.id))
                     conn.commit()
                     conn.close()
 
@@ -665,18 +957,19 @@ class UltimateLevelsCog(commands.Cog):
                     if r_target and r_target not in member.roles:
                         try:
                             await member.add_roles(r_target, reason=f"Level System: Reached level {new_lvl} via {trigger_type}")
-                            role_earned_str += f"\n🎁 **المكافأة:** تم منحك رتبة {r_target.mention}"
+                            role_earned_str += f"\n🎁 **مبروك يا فنان:** تم منحك رتبة المكافأة {r_target.mention}"
                         except:
                             pass
 
             try:
-                template = cfg.get("level_message", "تهانينا يا {user}! لقد صعدت إلى مستوى جديد، استمر في تفاعلك الرائع!")
+                template = cfg.get("level_message", "يا هلا يا {user}! لقد صعدت إلى المستوى {level} بنجاح.")
                 final_text = template.replace("{user}", member.mention).replace("{level}", f"`{new_lvl}`")
 
                 chan_id = cfg.get("announcement_channel")
                 target_channel = member.guild.get_channel(chan_id) if chan_id else member.guild.system_channel
 
                 if target_channel:
+                    img_url = cfg.get("level_image")
                     if cfg["msg_type"] == "embed":
                         embed = discord.Embed(
                             title=f"♦ ترقية إلى المستوى [{new_lvl}]",
@@ -685,9 +978,23 @@ class UltimateLevelsCog(commands.Cog):
                             timestamp=datetime.datetime.utcnow()
                         )
                         embed.set_thumbnail(url=member.display_avatar.url)
-                        await target_channel.send(content=f"🌟 مبروك يا {member.mention}!", embed=embed)
+                        if img_url:
+                            embed.set_image(url=img_url)
+                        await target_channel.send(content=f"🌟 عاش يا {member.mention}!", embed=embed)
                     else:
-                        await target_channel.send(content=f"🌟 {final_text}{role_earned_str}")
+                        await target_channel.send(content=f"🌟 {final_text}{role_earned_str}\n{img_url if img_url else ''}")
+
+                logs_id = cfg.get("logs_channel")
+                logs_channel = member.guild.get_channel(logs_id) if logs_id else None
+                if logs_channel:
+                    log_embed = discord.Embed(
+                        title="📋 سجل الترقية والنشاط",
+                        description=f"• **العضو:** {member.mention}\n• **وصل إلى المستوى:** `{new_lvl}` 🏆\n• **نوع التفاعل:** `{trigger_type}`{role_earned_str}",
+                        color=0x3498DB,
+                        timestamp=datetime.datetime.utcnow()
+                    )
+                    log_embed.set_thumbnail(url=member.display_avatar.url)
+                    await logs_channel.send(embed=log_embed)
             except:
                 pass
 
@@ -695,8 +1002,25 @@ class UltimateLevelsCog(commands.Cog):
     async def on_message(self, message):
         if message.author.bot or not message.guild:
             return
+        
         gid = message.guild.id
         cfg = get_levels_settings(gid)
+        clean_content = message.content.strip().lower()
+
+        # معالجة اختصارات الأوامر المباشرة في الشات
+        if clean_content == cfg["shortcut_level"]:
+            embed = await self.build_level_embed(message.guild, message.author)
+            await message.channel.send(embed=embed)
+            return
+        elif clean_content == cfg["shortcut_top"]:
+            view = TopLeaderboardView(message.guild, top_type="text", timeframe="all", page=0)
+            await message.channel.send(embed=view.create_embed(), view=view)
+            return
+        elif clean_content == cfg["shortcut_rewards"]:
+            embed = await self.build_rewards_embed(message.guild)
+            await message.channel.send(embed=embed)
+            return
+
         if not cfg["status"] or not cfg["text_xp_enabled"] or message.channel.id in cfg["ignored_channels"]:
             return
         if any(r.id in cfg["ignored_roles"] for r in message.author.roles):
@@ -712,12 +1036,13 @@ class UltimateLevelsCog(commands.Cog):
             mult = max(mult, cfg["channel_multipliers"][message.channel.id])
 
         base_xp = int(random.randint(cfg["min_text_xp"], cfg["max_text_xp"]) * mult)
+        now_ts = int(time.time())
         conn = sqlite3.connect(LEVELS_DB_FILE)
         cursor = conn.cursor()
         cursor.execute("SELECT xp, level, messages, day_text_xp, week_text_xp, month_text_xp FROM user_stats WHERE guild_id = ? AND user_id = ?", (gid, message.author.id))
         row = cursor.fetchone()
         if not row:
-            cursor.execute("INSERT INTO user_stats (guild_id, user_id, xp, level, messages, day_text_xp, week_text_xp, month_text_xp) VALUES (?, ?, ?, 0, 1, ?, ?, ?)", (gid, message.author.id, base_xp, base_xp, base_xp, base_xp))
+            cursor.execute("INSERT INTO user_stats (guild_id, user_id, xp, level, messages, day_text_xp, week_text_xp, month_text_xp, last_active_timestamp) VALUES (?, ?, ?, 0, 1, ?, ?, ?, ?)", (gid, message.author.id, base_xp, base_xp, base_xp, base_xp, now_ts))
             row = (base_xp, 0, 1, base_xp, base_xp, base_xp)
         else:
             new_xp = row[0] + base_xp
@@ -725,92 +1050,30 @@ class UltimateLevelsCog(commands.Cog):
             d_xp = row[3] + base_xp
             w_xp = row[4] + base_xp
             m_xp = row[5] + base_xp
-            cursor.execute("UPDATE user_stats SET xp = ?, messages = ?, day_text_xp = ?, week_text_xp = ?, month_text_xp = ? WHERE guild_id = ? AND user_id = ?", (new_xp, new_msgs, d_xp, w_xp, m_xp, gid, message.author.id))
+            cursor.execute("UPDATE user_stats SET xp = ?, messages = ?, day_text_xp = ?, week_text_xp = ?, month_text_xp = ?, last_active_timestamp = ? WHERE guild_id = ? AND user_id = ?", (new_xp, new_msgs, d_xp, w_xp, m_xp, now_ts, gid, message.author.id))
         conn.commit()
         conn.close()
 
         udata = {"xp": row[0] + base_xp, "level": row[1]}
         await self.check_level_up(message.author, gid, udata, cfg, trigger_type="text")
 
-    @app_commands.command(name="top", description="عرض المتصدرين")
+    @app_commands.command(name="top", description="عرض المتصدرين في السيرفر")
     async def top(self, interaction: discord.Interaction):
-        view = TopLeaderboardView(interaction.guild, duration="global", page=0)
+        view = TopLeaderboardView(interaction.guild, top_type="text", timeframe="all", page=0)
         await interaction.response.send_message(embed=view.create_embed(), view=view)
 
-    @app_commands.command(name="level", description="استعراض رانكك الحالي")
+    @app_commands.command(name="rewards", description="عرض جدول رتب والمستويات المتاحة في السيرفر")
+    async def rewards(self, interaction: discord.Interaction):
+        embed = await self.build_rewards_embed(interaction.guild)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="level", description="استعراض مستواك ورانكك الحالي")
     async def level(self, interaction: discord.Interaction, member: discord.Member = None):
         target = member or interaction.user
-        conn = sqlite3.connect(LEVELS_DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT xp, level, messages, voice_minutes FROM user_stats WHERE guild_id = ? AND user_id = ?", (interaction.guild.id, target.id))
-        row = cursor.fetchone()
-        
-        cursor.execute("SELECT user_id FROM user_stats WHERE guild_id = ? ORDER BY xp DESC", (interaction.guild.id,))
-        all_users = [r[0] for r in cursor.fetchall()]
-        rank = all_users.index(target.id) + 1 if target.id in all_users else "غير محدد"
-        conn.close()
-
-        xp, lvl, msgs, v_mins = row if row else (0, 0, 0, 0)
-        req_xp = int((lvl + 1) * 300 + (lvl ** 1.2 * 120))
-        cfg = get_levels_settings(interaction.guild.id)
-
-        has_mult = "نعم 🟡" if cfg["event_multiplier"] > 1.0 else "لا ⚪"
-        
-        user_mult = 1.0
-        if target.id in cfg["user_multipliers"]:
-            user_mult = max(user_mult, cfg["user_multipliers"][target.id])
-        for rid, mult in cfg["role_multipliers"].items():
-            if any(r.id == rid for r in target.roles):
-                if mult > user_mult:
-                    user_mult = mult
-
-        earned_roles = []
-        for l_str, r_list in cfg["role_rewards"].items():
-            if int(l_str) <= lvl:
-                for item in r_list:
-                    r_obj = interaction.guild.get_role(item["role_id"])
-                    if r_obj:
-                        earned_roles.append(r_obj.mention)
-        
-        earned_roles_str = " ، ".join(earned_roles) if earned_roles else "لا توجد رتب مكتسبة بعد"
-
-        pct = min(1.0, xp / req_xp) if req_xp > 0 else 0
-        filled = int(pct * 12)
-        
-        if user_mult >= 4.5:
-            bar = "⬜" * filled + "⬛" * (12 - filled)
-        elif user_mult >= 3.5:
-            bar = "🟨" * filled + "⬛" * (12 - filled)
-        elif user_mult >= 2.5:
-            bar = "🟧" * filled + "⬛" * (12 - filled)
-        elif user_mult >= 1.5:
-            bar = "🟥" * filled + "⬛" * (12 - filled)
-        elif user_mult > 1.0:
-            bar = "🟥🟩" * (filled // 2) + "🟩" * (filled % 2) + "⬛" * (12 - filled)
-        else:
-            bar = "🟩" * filled + "⬛" * (12 - filled)
-
-        mult_display = f"x{user_mult}" if user_mult > 1.0 else "x1.0"
-
-        embed = discord.Embed(color=0x2B2D31)
-        embed.set_author(name=f"📊 [ ] : مستوي ✦ {target.display_name}")
-        embed.set_thumbnail(url=target.display_avatar.url)
-
-        embed.add_field(name="🏆 [ ] : المستوى", value=f"```\n{lvl}\n```", inline=False)
-        embed.add_field(name="✨ [ ] : نقاط الـ XP", value=f"```\n{xp} / {req_xp}\n```", inline=False)
-        embed.add_field(name="📍 [ ] : الترتيب بالسيرفر", value=f"```\n{rank}\n```", inline=False)
-        embed.add_field(name="⚡ [ ] : مضاعف السيرفر", value=f"{has_mult}", inline=False)
-        embed.add_field(name="🛡️ [ ] : مضاعف رتبتك / حسابك", value=f"```\n{mult_display}\n```", inline=False)
-        embed.add_field(name="📝 [ ] : إجمالي الرسائل", value=f"```\n{msgs}\n```", inline=False)
-        embed.add_field(name="🎙️ [ ] : دقائق الصوت", value=f"```\n{v_mins} دقيقة\n```", inline=False)
-        embed.add_field(name="🎁 [ ] : رتب المكافآت المكتسبة", value=f"{earned_roles_str}", inline=False)
-        embed.add_field(name="📈 [ ] : شريط التقدم", value=f"{bar}", inline=False)
-
-        embed.set_footer(text=f"نظام المستويات والتفاعل | {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
-
+        embed = await self.build_level_embed(interaction.guild, target)
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="setup_levels", description="[الإدارة] لوحة تحكم المستويات الشاملة")
+    @app_commands.command(name="setup_levels", description="[الإدارة] لوحة تحكم المستويات والشات")
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_levels(self, interaction: discord.Interaction):
         await interaction.response.send_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView(), ephemeral=True)
