@@ -1,4 +1,5 @@
-discord.py
+discord.py[voice]
+PyNaCl
 requests
 python-dotenv
 PyGithub
