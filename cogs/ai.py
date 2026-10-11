@@ -57,7 +57,7 @@ class HybridSmartAICog(commands.Cog):
             if channel_id not in AI_SETTINGS[guild_id]["channels"]:
                 AI_SETTINGS[guild_id]["channels"].append(channel_id)
                 save_ai_config(AI_SETTINGS)
-                await interaction.response.send_message(f"✅ تم تفعيل النظام المزدوج في {interaction.channel.mention}", ephemeral=True)
+                await interaction.response.send_message(f"✅ تم تفعيل النظام المزدوج في <#{channel_id}>", ephemeral=True)
             else:
                 await interaction.response.send_message("⚠️ مفعّل بالفعل في هذه القناة!", ephemeral=True)
                 
@@ -67,7 +67,7 @@ class HybridSmartAICog(commands.Cog):
                 save_ai_config(AI_SETTINGS)
                 await interaction.response.send_message(f"🛑 تم إيقاف النظام المزدوج في هذه القناة.", ephemeral=True)
             else:
-                await interaction.response.send_message("⚠ غير مفعّل أصلاً هنا!", ephemeral=True)
+                await interaction.response.send_message("⚠️ غير مفعّل أصلاً هنا!", ephemeral=True)
 
     # دالة جلب الرد (تعتمد على الـ API، ولو فشل تحول تلقائي للنظام المحلي الذكي)
     async def get_hybrid_response(self, user_prompt):
@@ -79,7 +79,7 @@ class HybridSmartAICog(commands.Cog):
             
             payload = {
                 "messages": [
-                    {"role": "system", "content": "أنت نظام ذكاء اصطناعي مصري خفيف، ذكي جداً، وردودك سريعة ومترابطة."},
+                    {"role": "system", "content": "أنت نظام ذكاء اصطناعي مصري خفيف، ذكي جداً، وردودك سريعة وتحب المزاح مع الناس وتقدر تعمل قصف جبهات."},
                     {"role": "user", "content": user_prompt}
                 ],
                 "model": "openai",
