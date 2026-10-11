@@ -20,6 +20,7 @@ def init_levels_db():
             logs_channel INTEGER,
             msg_type TEXT DEFAULT 'text',
             level_message TEXT DEFAULT 'يا هلا يا {user}! لقد صعدت إلى المستوى {level} بنجاح، استمر في تفاعلك الجامد!',
+            level_embed_title TEXT DEFAULT '♦ ترقية إلى المستوى [{level}]',
             level_image TEXT,
             dm_notifications INTEGER DEFAULT 0,
             text_xp_enabled INTEGER DEFAULT 1,
@@ -47,6 +48,26 @@ def init_levels_db():
         )
     """)
     
+    # التأكد من وجود الأعمدة حتى لو كانت الداتابيز قديمة لمنع خطأ no such column
+    cursor.execute("PRAGMA table_info(server_settings)")
+    existing_columns = [row[1] for row in cursor.fetchall()]
+    
+    columns_to_add = {
+        "level_embed_title": "TEXT DEFAULT '♦ ترقية إلى المستوى [{level}]'",
+        "logs_channel": "INTEGER",
+        "inactivity_decay_enabled": "INTEGER DEFAULT 0",
+        "shortcut_level": "TEXT DEFAULT 'l'",
+        "shortcut_top": "TEXT DEFAULT 't'",
+        "shortcut_rewards": "TEXT DEFAULT 'r'"
+    }
+    
+    for col_name, col_def in columns_to_add.items():
+        if col_name not in existing_columns:
+            try:
+                cursor.execute(f"ALTER TABLE server_settings ADD COLUMN {col_name} {col_def}")
+            except Exception:
+                pass
+
     cursor.execute("CREATE TABLE IF NOT EXISTS ignored_roles (guild_id INTEGER, role_id INTEGER, PRIMARY KEY (guild_id, role_id))")
     cursor.execute("CREATE TABLE IF NOT EXISTS ignored_channels (guild_id INTEGER, channel_id INTEGER, PRIMARY KEY (guild_id, channel_id))")
     cursor.execute("CREATE TABLE IF NOT EXISTS ignored_voice_channels (guild_id INTEGER, channel_id INTEGER, PRIMARY KEY (guild_id, channel_id))")
@@ -280,7 +301,7 @@ class SystemStateModal(discord.ui.Modal, title="🔄 تفعيل/إيقاف أن�
 
 class AnnouncementChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
-        super().__init__(placeholder="📢 اختر قناة إعلانات الترقية", channel_types=[discord.ChannelType.text], min_values=1, max_values=1, custom_id="sel_announce_chan_v10")
+        super().__init__(placeholder="📢 اختر قناة إعلانات الترقية", channel_types=[discord.ChannelType.text], min_values=1, max_values=1, custom_id="sel_announce_chan_v11")
 
     async def callback(self, interaction: discord.Interaction):
         selected_chan = self.values[0]
@@ -290,7 +311,7 @@ class AnnouncementChannelSelect(discord.ui.ChannelSelect):
 
 class LogsChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
-        super().__init__(placeholder="📋 اختر قناة السجلات (Logs)", channel_types=[discord.ChannelType.text], min_values=1, max_values=1, custom_id="sel_logs_chan_v10")
+        super().__init__(placeholder="📋 اختر قناة السجلات (Logs)", channel_types=[discord.ChannelType.text], min_values=1, max_values=1, custom_id="sel_logs_chan_v11")
 
     async def callback(self, interaction: discord.Interaction):
         selected_chan = self.values[0]
@@ -385,7 +406,7 @@ class MultiplierValueModal(discord.ui.Modal, title="⚡ تعيين قيمة ال
 
 class SelectUsersForMultiplier(discord.ui.UserSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الأعضاء لتطبيق المضاعف عليهم", min_values=1, max_values=10, custom_id="sel_mult_users_v10")
+        super().__init__(placeholder="اختر الأعضاء لتطبيق المضاعف عليهم", min_values=1, max_values=10, custom_id="sel_mult_users_v11")
 
     async def callback(self, interaction: discord.Interaction):
         u_ids = [u.id for u in self.values]
@@ -393,7 +414,7 @@ class SelectUsersForMultiplier(discord.ui.UserSelect):
 
 class SelectRolesForMultiplier(discord.ui.RoleSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الرتب لتطبيق المضاعف عليها", min_values=1, max_values=10, custom_id="sel_mult_roles_v10")
+        super().__init__(placeholder="اختر الرتب لتطبيق المضاعف عليها", min_values=1, max_values=10, custom_id="sel_mult_roles_v11")
 
     async def callback(self, interaction: discord.Interaction):
         r_ids = [r.id for r in self.values]
@@ -401,7 +422,7 @@ class SelectRolesForMultiplier(discord.ui.RoleSelect):
 
 class SelectChannelsForMultiplier(discord.ui.ChannelSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الرومات لتطبيق المضاعف عليها", min_values=1, max_values=10, custom_id="sel_mult_chans_v10")
+        super().__init__(placeholder="اختر الرومات لتطبيق المضاعف عليها", min_values=1, max_values=10, custom_id="sel_mult_chans_v11")
 
     async def callback(self, interaction: discord.Interaction):
         c_ids = [c.id for c in self.values]
@@ -411,19 +432,19 @@ class MultiplierTypeSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="مضاعف لأعضاء 👤", style=discord.ButtonStyle.primary, custom_id="m_type_user_v10")
+    @discord.ui.button(label="مضاعف لأعضاء 👤", style=discord.ButtonStyle.primary, custom_id="m_type_user_v11")
     async def mult_user(self, interaction: discord.Interaction, button: discord.ui.Button):
         v = discord.ui.View(timeout=60)
         v.add_item(SelectUsersForMultiplier())
         await interaction.response.send_message(embed=discord.Embed(title="👤 اختر الأعضاء", description="حدد الشخص من القائمة يا فنان:", color=0x2B2D31), view=v, ephemeral=True)
 
-    @discord.ui.button(label="مضاعف لرتب 🛡️", style=discord.ButtonStyle.secondary, custom_id="m_type_role_v10")
+    @discord.ui.button(label="مضاعف لرتب 🛡️", style=discord.ButtonStyle.secondary, custom_id="m_type_role_v11")
     async def mult_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         v = discord.ui.View(timeout=60)
         v.add_item(SelectRolesForMultiplier())
         await interaction.response.send_message(embed=discord.Embed(title="🛡️ اختر الرتب", description="حدد الرتبة من القائمة يا غالي:", color=0x2B2D31), view=v, ephemeral=True)
 
-    @discord.ui.button(label="مضاعف لرومات 💬/🎙️", style=discord.ButtonStyle.success, custom_id="m_type_chan_v10")
+    @discord.ui.button(label="مضاعف لرومات 💬/🎙️", style=discord.ButtonStyle.success, custom_id="m_type_chan_v11")
     async def mult_chan(self, interaction: discord.Interaction, button: discord.ui.Button):
         v = discord.ui.View(timeout=60)
         v.add_item(SelectChannelsForMultiplier())
@@ -431,7 +452,7 @@ class MultiplierTypeSelectView(discord.ui.View):
 
 class IgnoreRoleSelect(discord.ui.RoleSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الرتب المراد استبعادها من الـ XP", min_values=1, max_values=10, custom_id="sel_ignore_role_v10")
+        super().__init__(placeholder="اختر الرتب المراد استبعادها من الـ XP", min_values=1, max_values=10, custom_id="sel_ignore_role_v11")
 
     async def callback(self, interaction: discord.Interaction):
         conn = sqlite3.connect(LEVELS_DB_FILE)
@@ -445,7 +466,7 @@ class IgnoreRoleSelect(discord.ui.RoleSelect):
 
 class IgnoreChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
-        super().__init__(placeholder="اختر الرومات المراد استبعادها من الـ XP", min_values=1, max_values=10, custom_id="sel_ignore_chan_v10")
+        super().__init__(placeholder="اختر الرومات المراد استبعادها من الـ XP", min_values=1, max_values=10, custom_id="sel_ignore_chan_v11")
 
     async def callback(self, interaction: discord.Interaction):
         conn = sqlite3.connect(LEVELS_DB_FILE)
@@ -521,55 +542,55 @@ class LevelsAdminPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="تشغيل / إيقاف النظام", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="p_tgl_v10")
+    @discord.ui.button(label="تشغيل / إيقاف النظام", style=discord.ButtonStyle.blurple, emoji="🔄", row=0, custom_id="p_tgl_v11")
     async def toggle_sys(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_modal(SystemStateModal())
 
-    @discord.ui.button(label="تحديد الاختصارات ⚡", style=discord.ButtonStyle.primary, emoji="⌨️", row=0, custom_id="p_shortcuts_v10")
+    @discord.ui.button(label="تحديد الاختصارات ⚡", style=discord.ButtonStyle.primary, emoji="⌨️", row=0, custom_id="p_shortcuts_v11")
     async def set_shortcuts_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_modal(SystemShortcutsModal())
 
-    @discord.ui.button(label="قناة إعلانات الترقية", style=discord.ButtonStyle.secondary, emoji="📢", row=0, custom_id="p_ann_chan_v10")
+    @discord.ui.button(label="قناة إعلانات الترقية", style=discord.ButtonStyle.secondary, emoji="📢", row=0, custom_id="p_ann_chan_v11")
     async def set_announce_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_message(embed=discord.Embed(title="📢 قناة الإعلانات", description="اختر قناة إعلانات الترقية من القائمة أدناه:", color=0x2B2D31), view=AnnouncementView(), ephemeral=True)
 
-    @discord.ui.button(label="قناة السجلات (Logs)", style=discord.ButtonStyle.secondary, emoji="📋", row=1, custom_id="p_logs_chan_v10")
+    @discord.ui.button(label="قناة السجلات (Logs)", style=discord.ButtonStyle.secondary, emoji="📋", row=1, custom_id="p_logs_chan_v11")
     async def set_logs_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_message(embed=discord.Embed(title="📋 قناة السجلات", description="اختر قناة السجلات الإدارية من القائمة أدناه:", color=0x2B2D31), view=LogsChannelView(), ephemeral=True)
 
-    @discord.ui.button(label="إعدادات الـ XP", style=discord.ButtonStyle.primary, emoji="⚙️", row=1, custom_id="p_xp_unified_v10")
+    @discord.ui.button(label="إعدادات الـ XP", style=discord.ButtonStyle.primary, emoji="⚙️", row=1, custom_id="p_xp_unified_v11")
     async def xp_unified_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_modal(Step3XpValuesModal())
 
-    @discord.ui.button(label="مضاعفات الـ XP", style=discord.ButtonStyle.success, emoji="⚡", row=1, custom_id="p_mult_custom_v10")
+    @discord.ui.button(label="مضاعفات الـ XP", style=discord.ButtonStyle.success, emoji="⚡", row=1, custom_id="p_mult_custom_v11")
     async def custom_mult_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_message(embed=discord.Embed(title="⚡ إدارة مضاعفات الـ XP", description="اختر الفئة المراد تطبيق المضاعف عليها:", color=0x2B2D31), view=MultiplierTypeSelectView(), ephemeral=True)
 
-    @discord.ui.button(label="رسالة الترقية", style=discord.ButtonStyle.secondary, emoji="💬", row=2, custom_id="p_msg_v10")
+    @discord.ui.button(label="رسالة الترقية", style=discord.ButtonStyle.secondary, emoji="💬", row=2, custom_id="p_msg_v11")
     async def msg_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_modal(Step2XpMessageModal())
 
-    @discord.ui.button(label="إضافة رول مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=2, custom_id="p_reward_v10")
+    @discord.ui.button(label="إضافة رول مكافأة", style=discord.ButtonStyle.success, emoji="🎁", row=2, custom_id="p_reward_v11")
     async def reward_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
         await interaction.response.send_modal(LevelsRewardModal())
 
-    @discord.ui.button(label="نظام طرد المتخاذلين (5 أيام)", style=discord.ButtonStyle.blurple, emoji="🧹", row=2, custom_id="p_decay_v10")
+    @discord.ui.button(label="نظام طرد المتخاذلين (5 أيام)", style=discord.ButtonStyle.blurple, emoji="🧹", row=2, custom_id="p_decay_v11")
     async def decay_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
@@ -578,7 +599,7 @@ class LevelsAdminPanelView(discord.ui.View):
         update_levels_setting(interaction.guild.id, "inactivity_decay_enabled", new_val)
         await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=self)
 
-    @discord.ui.button(label="استبعاد روم أو رول", style=discord.ButtonStyle.danger, emoji="🚫", row=2, custom_id="p_ignore_combined_v10")
+    @discord.ui.button(label="استبعاد روم أو رول", style=discord.ButtonStyle.danger, emoji="🚫", row=2, custom_id="p_ignore_combined_v11")
     async def ignore_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return
@@ -591,7 +612,7 @@ class TopTypeSelect(discord.ui.Select):
             discord.SelectOption(label="الصوتي / Voice XP", value="voice", emoji="🎙️", default=(current_type == "voice")),
             discord.SelectOption(label="الرياكشن / Reactions", value="reaction", emoji="⭐", default=(current_type == "reaction")),
         ]
-        super().__init__(placeholder="اختر قسم الترتيب يا فنان", options=options, custom_id="top_type_sel_v10")
+        super().__init__(placeholder="اختر قسم الترتيب يا فنان", options=options, custom_id="top_type_sel_v11")
 
     async def callback(self, interaction: discord.Interaction):
         view: TopLeaderboardView = self.view
@@ -608,7 +629,7 @@ class TopTimeframeSelect(discord.ui.Select):
             discord.SelectOption(label="الأسبوعي / Weekly", value="week", emoji="🗓️", default=(current_timeframe == "week")),
             discord.SelectOption(label="الشهري / Monthly", value="month", emoji="📆", default=(current_timeframe == "month")),
         ]
-        super().__init__(placeholder="اختر الفترة الزمنية للترتيب", options=options, custom_id="top_tf_sel_v10")
+        super().__init__(placeholder="اختر الفترة الزمنية للترتيب", options=options, custom_id="top_tf_sel_v11")
 
     async def callback(self, interaction: discord.Interaction):
         view: TopLeaderboardView = self.view
@@ -728,21 +749,21 @@ class TopLeaderboardView(discord.ui.View):
         embed.set_footer(text=f"الصفحة {self.page + 1} من {(len(rows) - 1) // self.per_page + 1 if rows else 1}")
         return embed
 
-    @discord.ui.button(style=discord.ButtonStyle.primary, emoji="◀", custom_id="t_prev_v10")
+    @discord.ui.button(style=discord.ButtonStyle.primary, emoji="◀", custom_id="t_prev_v11")
     async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.guild = interaction.guild
         if self.page > 0:
             self.page -= 1
             await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
-    @discord.ui.button(label="ترتيبي", style=discord.ButtonStyle.secondary, custom_id="t_my_v10")
+    @discord.ui.button(label="ترتيبي", style=discord.ButtonStyle.secondary, custom_id="t_my_v11")
     async def my_rank_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.guild = interaction.guild
         rows = self.fetch_data()
         pos = next((i for i, r in enumerate(rows, 1) if r[0] == interaction.user.id), None)
         await interaction.response.send_message(embed=discord.Embed(title="📍 ترتيبك", description=f"يا فنان، ترتيبك هو: `#{pos}`" if pos else "مش ظاهر في قائمة التوب حالياً.", color=0x00FF88), ephemeral=True)
 
-    @discord.ui.button(style=discord.ButtonStyle.primary, emoji="▶", custom_id="t_next_v10")
+    @discord.ui.button(style=discord.ButtonStyle.primary, emoji="▶", custom_id="t_next_v11")
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.guild = interaction.guild
         rows = self.fetch_data()
