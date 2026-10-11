@@ -21,7 +21,7 @@ class VoiceControlView(discord.ui.View):
         if guild.voice_client:
             db.remove(str(guild.id))
             channel_name = guild.voice_client.channel.name
-            await guild.voice_client.disconnect()
+            await guild.voice_client.disconnect(force=True)
             
             embed = discord.Embed(
                 title="🔌 ╎ مـغـادرة الروم الصوتي 〣 ｢⚠️｣",
@@ -63,7 +63,7 @@ class VoiceControlView(discord.ui.View):
             if interaction.guild.voice_client:
                 await interaction.guild.voice_client.move_to(target_channel)
             else:
-                await target_channel.connect(reconnect=True, timeout=60.0)
+                await target_channel.connect(reconnect=True, timeout=20.0, self_deaf=True)
             
             await interaction.response.send_message(f"✅ تم إعادة اتصال البوت بنجاح بروم {target_channel.mention}!", ephemeral=True)
         except Exception as e:
@@ -72,21 +72,25 @@ class VoiceControlView(discord.ui.View):
 class VoicePresenceCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.bot.loop.create_task(self.auto_reconnect_on_startup())
+
+    async def cog_load(self):
+        # تشغيل التعديل الأوتوماتيكي عند تحميل الـ Cog لمنع تعليق البوت
+        asyncio.create_task(self.auto_reconnect_on_startup())
 
     async def auto_reconnect_on_startup(self):
         await self.bot.wait_until_ready()
+        await asyncio.sleep(5)  # انتظار 5 ثواني لضمان استقرار اتصالات الشاردات
         for guild_id_str, channel_id in list(db.data.items()):
             guild = self.bot.get_guild(int(guild_id_str))
             if guild:
                 channel = guild.get_channel(channel_id)
-                if channel and isinstance(channel, discord.VoiceChannel):
+                if channel and isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
                     if not guild.voice_client:
                         try:
-                            await channel.connect(reconnect=True, timeout=60.0)
+                            await channel.connect(reconnect=True, timeout=20.0, self_deaf=True)
                         except Exception:
                             pass
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
@@ -97,9 +101,10 @@ class VoicePresenceCog(commands.Cog):
                 if target_channel_id:
                     target_channel = self.bot.get_channel(target_channel_id)
                     if target_channel:
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(3)
                         try:
-                            await target_channel.connect(reconnect=True, timeout=60.0)
+                            if not member.guild.voice_client:
+                                await target_channel.connect(reconnect=True, timeout=20.0, self_deaf=True)
                         except Exception:
                             pass
 
@@ -117,7 +122,7 @@ class VoicePresenceCog(commands.Cog):
                 await interaction.followup.send("❌ يرجى تحديد روم صوتي، أو الانضمام إلى روم صوتي أولاً!", ephemeral=True)
                 return
 
-        if not isinstance(target_channel, discord.VoiceChannel):
+        if not isinstance(target_channel, (discord.VoiceChannel, discord.StageChannel)):
             await interaction.followup.send("❌ العنصر المحدد ليس روم صوتياً صالحاً!", ephemeral=True)
             return
 
@@ -133,7 +138,8 @@ class VoicePresenceCog(commands.Cog):
                 await interaction.guild.voice_client.move_to(target_channel)
                 action_status = "نقل البوت وحفظ التواجد الدائم بنجاح"
             else:
-                await target_channel.connect(reconnect=True, timeout=60.0)
+                # إدخال البوت مع وضع Deafen تلقائياً لتقليل استهلاك السيرفر وسرعة الاستجابة
+                await target_channel.connect(reconnect=True, timeout=20.0, self_deaf=True)
                 action_status = "انضمام البوت وحفظ التواجد الدائم بنجاح"
 
             embed = discord.Embed(
@@ -151,13 +157,13 @@ class VoicePresenceCog(commands.Cog):
             await interaction.followup.send(embed=embed, view=view)
 
         except discord.ClientException as e:
-            await interaction.followup.send(f"❌ خطأ في الاتصال الصوتي: `{e}`", ephemeral=True)
+            await interaction.followup.send(f"❌ خطأ في الاتصال الصوتي (تأكد من وجود PyNaCl): `{e}`", ephemeral=True)
         except discord.Forbidden:
-            await interaction.followup.send("❌ لا أمتلك صلاحيات كافية لدخول هذا الروم الصوتي.", ephemeral=True)
+            await interaction.followup.send("❌ لا أمتلك صلاحيات كافية (Connect / Speak) لدخول هذا الروم الصوتي.", ephemeral=True)
         except asyncio.TimeoutError:
-            await interaction.followup.send("❌ انتهت مهلة الاتصال بالروم الصوتي.", ephemeral=True)
+            await interaction.followup.send("❌ انتهت مهلة الاتصال بالروم الصوتي (تأكد من استقرار السيرفر).", ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"❌ حدث خطأ: `{e}`", ephemeral=True)
+            await interaction.followup.send(f"❌ حدث خطأ غير متوقع: `{e}`", ephemeral=True)
 
     @app_commands.command(name="leavevc", description="[إدارة] إخراج البوت من الروم الصوتي ومسح حفظه نهائياً")
     @app_commands.checks.has_permissions(administrator=True)
@@ -167,7 +173,7 @@ class VoicePresenceCog(commands.Cog):
         if interaction.guild.voice_client:
             db.remove(guild_id_str)
             channel_name = interaction.guild.voice_client.channel.name
-            await interaction.guild.voice_client.disconnect()
+            await interaction.guild.voice_client.disconnect(force=True)
             
             embed = discord.Embed(
                 title="🔌 ╎ مـغـادرة الروم الصوتي 〣 ｢⚠️｣",
