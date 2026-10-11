@@ -4,196 +4,111 @@ from discord.ext import commands, tasks
 import datetime
 import random
 import time
-import sqlite3
+import os
+from pymongo import MongoClient
+from dotenv import load_dotenv
 
-LEVELS_DB_FILE = "ultimate_levels_database.db"
+load_dotenv()
+MONGO_URI = os.getenv("MONGODB_URI")
 
-def init_levels_db():
-    conn = sqlite3.connect(LEVELS_DB_FILE)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS server_settings (
-            guild_id INTEGER PRIMARY KEY,
-            status INTEGER DEFAULT 1,
-            announcement_channel INTEGER,
-            logs_channel INTEGER,
-            msg_type TEXT DEFAULT 'text',
-            level_message TEXT DEFAULT 'يا هلا يا {user}! لقد صعدت إلى المستوى {level} بنجاح، استمر في تفاعلك الجامد!',
-            level_embed_title TEXT DEFAULT '♦ ترقية إلى المستوى [{level}]',
-            level_image TEXT,
-            dm_notifications INTEGER DEFAULT 0,
-            text_xp_enabled INTEGER DEFAULT 1,
-            min_text_xp INTEGER DEFAULT 5,
-            max_text_xp INTEGER DEFAULT 45,
-            text_cooldown INTEGER DEFAULT 60,
-            voice_xp_enabled INTEGER DEFAULT 1,
-            min_voice_xp INTEGER DEFAULT 2,
-            max_voice_xp INTEGER DEFAULT 5,
-            voice_cooldown INTEGER DEFAULT 4,
-            reaction_xp_enabled INTEGER DEFAULT 0,
-            min_reaction_xp INTEGER DEFAULT 2,
-            max_reaction_xp INTEGER DEFAULT 5,
-            event_multiplier REAL DEFAULT 1.0,
-            event_type TEXT DEFAULT 'both',
-            event_end_timestamp INTEGER DEFAULT 0,
-            event_target_roles TEXT DEFAULT 'all',
-            periodic_reward_role INTEGER,
-            periodic_type TEXT DEFAULT 'week',
-            last_weekly_reset INTEGER DEFAULT 0,
-            inactivity_decay_enabled INTEGER DEFAULT 0,
-            shortcut_level TEXT DEFAULT 'l',
-            shortcut_top TEXT DEFAULT 't',
-            shortcut_rewards TEXT DEFAULT 'r'
-        )
-    """)
-    
-    # التأكد من وجود الأعمدة حتى لو كانت الداتابيز قديمة لمنع خطأ no such column
-    cursor.execute("PRAGMA table_info(server_settings)")
-    existing_columns = [row[1] for row in cursor.fetchall()]
-    
-    columns_to_add = {
-        "level_embed_title": "TEXT DEFAULT '♦ ترقية إلى المستوى [{level}]'",
-        "logs_channel": "INTEGER",
-        "inactivity_decay_enabled": "INTEGER DEFAULT 0",
-        "shortcut_level": "TEXT DEFAULT 'l'",
-        "shortcut_top": "TEXT DEFAULT 't'",
-        "shortcut_rewards": "TEXT DEFAULT 'r'"
-    }
-    
-    for col_name, col_def in columns_to_add.items():
-        if col_name not in existing_columns:
-            try:
-                cursor.execute(f"ALTER TABLE server_settings ADD COLUMN {col_name} {col_def}")
-            except Exception:
-                pass
+# الاتصال بقاعدة بيانات MongoDB السحابية
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client["ZeroPro_Levels_DB"]
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS ignored_roles (guild_id INTEGER, role_id INTEGER, PRIMARY KEY (guild_id, role_id))")
-    cursor.execute("CREATE TABLE IF NOT EXISTS ignored_channels (guild_id INTEGER, channel_id INTEGER, PRIMARY KEY (guild_id, channel_id))")
-    cursor.execute("CREATE TABLE IF NOT EXISTS ignored_voice_channels (guild_id INTEGER, channel_id INTEGER, PRIMARY KEY (guild_id, channel_id))")
-    cursor.execute("CREATE TABLE IF NOT EXISTS role_multipliers (guild_id INTEGER, role_id INTEGER, multiplier REAL, PRIMARY KEY (guild_id, role_id))")
-    cursor.execute("CREATE TABLE IF NOT EXISTS user_multipliers (guild_id INTEGER, user_id INTEGER, multiplier REAL, PRIMARY KEY (guild_id, user_id))")
-    cursor.execute("CREATE TABLE IF NOT EXISTS channel_multipliers (guild_id INTEGER, channel_id INTEGER, multiplier REAL, PRIMARY KEY (guild_id, channel_id))")
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS role_rewards (
-            guild_id INTEGER,
-            level INTEGER,
-            role_id INTEGER,
-            req_type TEXT DEFAULT 'all',
-            PRIMARY KEY (guild_id, level, role_id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_stats (
-            guild_id INTEGER,
-            user_id INTEGER,
-            xp INTEGER DEFAULT 0,
-            level INTEGER DEFAULT 0,
-            messages INTEGER DEFAULT 0,
-            voice_minutes INTEGER DEFAULT 0,
-            voice_xp INTEGER DEFAULT 0,
-            reaction_xp INTEGER DEFAULT 0,
-            day_text_xp INTEGER DEFAULT 0,
-            week_text_xp INTEGER DEFAULT 0,
-            month_text_xp INTEGER DEFAULT 0,
-            last_active_timestamp INTEGER DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
-
-init_levels_db()
+settings_col = db["server_settings"]
+user_stats_col = db["user_stats"]
+role_rewards_col = db["role_rewards"]
+ignored_roles_col = db["ignored_roles"]
+ignored_channels_col = db["ignored_channels"]
+ignored_voice_col = db["ignored_voice"]
+role_multipliers_col = db["role_multipliers"]
+user_multipliers_col = db["user_multipliers"]
+channel_multipliers_col = db["channel_multipliers"]
 
 def get_levels_settings(guild_id: int):
-    conn = sqlite3.connect(LEVELS_DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT status, announcement_channel, logs_channel, msg_type, level_message, level_embed_title, level_image, dm_notifications,
-               text_xp_enabled, min_text_xp, max_text_xp, text_cooldown,
-               voice_xp_enabled, min_voice_xp, max_voice_xp, voice_cooldown,
-               reaction_xp_enabled, min_reaction_xp, max_reaction_xp,
-               event_multiplier, event_type, event_end_timestamp, event_target_roles,
-               periodic_reward_role, periodic_type, inactivity_decay_enabled,
-               shortcut_level, shortcut_top, shortcut_rewards
-        FROM server_settings WHERE guild_id = ?
-    """, (guild_id,))
-    row = cursor.fetchone()
+    doc = settings_col.find_one({"guild_id": guild_id})
     
-    if not row:
-        cursor.execute("INSERT INTO server_settings (guild_id) VALUES (?)", (guild_id,))
-        conn.commit()
-        cursor.execute("""
-            SELECT status, announcement_channel, logs_channel, msg_type, level_message, level_embed_title, level_image, dm_notifications,
-                   text_xp_enabled, min_text_xp, max_text_xp, text_cooldown,
-                   voice_xp_enabled, min_voice_xp, max_voice_xp, voice_cooldown,
-                   reaction_xp_enabled, min_reaction_xp, max_reaction_xp,
-                   event_multiplier, event_type, event_end_timestamp, event_target_roles,
-                   periodic_reward_role, periodic_type, inactivity_decay_enabled,
-                   shortcut_level, shortcut_top, shortcut_rewards
-            FROM server_settings WHERE guild_id = ?
-        """, (guild_id,))
-        row = cursor.fetchone()
+    if not doc:
+        doc = {
+            "guild_id": guild_id,
+            "status": 1,
+            "announcement_channel": None,
+            "logs_channel": None,
+            "msg_type": "text",
+            "level_message": "يا هلا يا {user}! لقد صعدت إلى المستوى {level} بنجاح، استمر في تفاعلك الجامد!",
+            "level_embed_title": "♦ ترقية إلى المستوى [{level}]",
+            "level_image": None,
+            "dm_notifications": 0,
+            "text_xp_enabled": 1,
+            "min_text_xp": 5,
+            "max_text_xp": 45,
+            "text_cooldown": 60,
+            "voice_xp_enabled": 1,
+            "min_voice_xp": 2,
+            "max_voice_xp": 5,
+            "voice_cooldown": 4,
+            "reaction_xp_enabled": 0,
+            "min_reaction_xp": 2,
+            "max_reaction_xp": 5,
+            "event_multiplier": 1.0,
+            "event_type": "both",
+            "event_end_timestamp": 0,
+            "event_target_roles": "all",
+            "periodic_reward_role": None,
+            "periodic_type": "week",
+            "last_weekly_reset": 0,
+            "inactivity_decay_enabled": 0,
+            "shortcut_level": "l",
+            "shortcut_top": "t",
+            "shortcut_rewards": "r"
+        }
+        settings_col.insert_one(doc)
 
-    cursor.execute("SELECT level, role_id, req_type FROM role_rewards WHERE guild_id = ?", (guild_id,))
+    # جلب المكافآت والاستثناءات
+    rewards_cursor = role_rewards_col.find({"guild_id": guild_id})
     role_rewards = {}
-    for lvl, r_id, r_type in cursor.fetchall():
-        type_str = r_type if r_type else "all"
-        role_rewards.setdefault(str(lvl), []).append({"role_id": r_id, "req_type": type_str})
+    for r in rewards_cursor:
+        type_str = r.get("req_type", "all")
+        role_rewards.setdefault(str(r["level"]), []).append({"role_id": r["role_id"], "req_type": type_str})
 
-    cursor.execute("SELECT role_id FROM ignored_roles WHERE guild_id = ?", (guild_id,))
-    ignored_roles = [r[0] for r in cursor.fetchall()]
+    ignored_roles = [r["role_id"] for r in ignored_roles_col.find({"guild_id": guild_id})]
+    ignored_channels = [c["channel_id"] for c in ignored_channels_col.find({"guild_id": guild_id})]
+    ignored_voice = [v["channel_id"] for v in ignored_voice_col.find({"guild_id": guild_id})]
 
-    cursor.execute("SELECT channel_id FROM ignored_channels WHERE guild_id = ?", (guild_id,))
-    ignored_channels = [r[0] for r in cursor.fetchall()]
+    role_mults = {item["role_id"]: item["multiplier"] for item in role_multipliers_col.find({"guild_id": guild_id})}
+    user_mults = {item["user_id"]: item["multiplier"] for item in user_multipliers_col.find({"guild_id": guild_id})}
+    channel_mults = {item["channel_id"]: item["multiplier"] for item in channel_multipliers_col.find({"guild_id": guild_id})}
 
-    cursor.execute("SELECT channel_id FROM ignored_voice_channels WHERE guild_id = ?", (guild_id,))
-    ignored_voice = [r[0] for r in cursor.fetchall()]
-
-    cursor.execute("SELECT role_id, multiplier FROM role_multipliers WHERE guild_id = ?", (guild_id,))
-    role_mults = dict(cursor.fetchall())
-
-    cursor.execute("SELECT user_id, multiplier FROM user_multipliers WHERE guild_id = ?", (guild_id,))
-    user_mults = dict(cursor.fetchall())
-
-    cursor.execute("SELECT channel_id, multiplier FROM channel_multipliers WHERE guild_id = ?", (guild_id,))
-    channel_mults = dict(cursor.fetchall())
-
-    conn.close()
-    
     return {
-        "status": bool(row[0]),
-        "announcement_channel": row[1],
-        "logs_channel": row[2] if len(row) > 2 else None,
-        "msg_type": row[3] if row[3] else "text",
-        "level_message": row[4],
-        "level_embed_title": row[5],
-        "level_image": row[6],
-        "dm_notifications": bool(row[7]),
-        "text_xp_enabled": bool(row[8]),
-        "min_text_xp": row[9],
-        "max_text_xp": row[10],
-        "text_cooldown": row[11],
-        "voice_xp_enabled": bool(row[12]),
-        "min_voice_xp": row[13],
-        "max_voice_xp": row[14],
-        "voice_cooldown": row[15],
-        "reaction_xp_enabled": bool(row[16]),
-        "min_reaction_xp": row[17],
-        "max_reaction_xp": row[18],
-        "event_multiplier": row[19],
-        "event_type": row[20],
-        "event_end_timestamp": row[21],
-        "event_target_roles": row[22],
-        "periodic_reward_role": row[23],
-        "periodic_type": row[24],
-        "inactivity_decay_enabled": bool(row[25]) if len(row) > 25 else False,
-        "shortcut_level": row[26] if len(row) > 26 and row[26] else "l",
-        "shortcut_top": row[27] if len(row) > 27 and row[27] else "t",
-        "shortcut_rewards": row[28] if len(row) > 28 and row[28] else "r",
+        "status": bool(doc.get("status", 1)),
+        "announcement_channel": doc.get("announcement_channel"),
+        "logs_channel": doc.get("logs_channel"),
+        "msg_type": doc.get("msg_type", "text"),
+        "level_message": doc.get("level_message"),
+        "level_embed_title": doc.get("level_embed_title"),
+        "level_image": doc.get("level_image"),
+        "dm_notifications": bool(doc.get("dm_notifications", 0)),
+        "text_xp_enabled": bool(doc.get("text_xp_enabled", 1)),
+        "min_text_xp": doc.get("min_text_xp", 5),
+        "max_text_xp": doc.get("max_text_xp", 45),
+        "text_cooldown": doc.get("text_cooldown", 60),
+        "voice_xp_enabled": bool(doc.get("voice_xp_enabled", 1)),
+        "min_voice_xp": doc.get("min_voice_xp", 2),
+        "max_voice_xp": doc.get("max_voice_xp", 5),
+        "voice_cooldown": doc.get("voice_cooldown", 4),
+        "reaction_xp_enabled": bool(doc.get("reaction_xp_enabled", 0)),
+        "min_reaction_xp": doc.get("min_reaction_xp", 2),
+        "max_reaction_xp": doc.get("max_reaction_xp", 5),
+        "event_multiplier": doc.get("event_multiplier", 1.0),
+        "event_type": doc.get("event_type", "both"),
+        "event_end_timestamp": doc.get("event_end_timestamp", 0),
+        "event_target_roles": doc.get("event_target_roles", "all"),
+        "periodic_reward_role": doc.get("periodic_reward_role"),
+        "periodic_type": doc.get("periodic_type", "week"),
+        "inactivity_decay_enabled": bool(doc.get("inactivity_decay_enabled", 0)),
+        "shortcut_level": doc.get("shortcut_level", "l"),
+        "shortcut_top": doc.get("shortcut_top", "t"),
+        "shortcut_rewards": doc.get("shortcut_rewards", "r"),
         "role_rewards": role_rewards,
         "ignored_roles": ignored_roles,
         "ignored_channels": ignored_channels,
@@ -204,11 +119,7 @@ def get_levels_settings(guild_id: int):
     }
 
 def update_levels_setting(guild_id: int, column: str, value):
-    conn = sqlite3.connect(LEVELS_DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(f"UPDATE server_settings SET {column} = ? WHERE guild_id = ?", (value, guild_id))
-    conn.commit()
-    conn.close()
+    settings_col.update_one({"guild_id": guild_id}, {"$set": {column: value}}, upsert=True)
 
 def generate_levels_panel_embed(guild: discord.Guild):
     cfg = get_levels_settings(guild.id)
@@ -259,7 +170,7 @@ def generate_levels_panel_embed(guild: discord.Guild):
         color=0x2B2D31,
         timestamp=datetime.datetime.utcnow()
     )
-    embed.set_footer(text="نظبط لك السيرفر بأعلى جودة يا غالي 🚀")
+    embed.set_footer(text=f"{guild.name} ✦ Voice & Level System")
     return embed
 
 class SystemShortcutsModal(discord.ui.Modal, title="⚡ تحديد اختصارات الأوامر"):
@@ -384,21 +295,15 @@ class MultiplierValueModal(discord.ui.Modal, title="⚡ تعيين قيمة ال
             if val < 1.0 or val > 5.0:
                 raise ValueError
             
-            conn = sqlite3.connect(LEVELS_DB_FILE)
-            cursor = conn.cursor()
-            
             if self.target_type == "user":
                 for uid in self.target_ids:
-                    cursor.execute("INSERT OR REPLACE INTO user_multipliers (guild_id, user_id, multiplier) VALUES (?, ?, ?)", (interaction.guild.id, uid, val))
+                    user_multipliers_col.update_one({"guild_id": interaction.guild.id, "user_id": uid}, {"$set": {"multiplier": val}}, upsert=True)
             elif self.target_type == "role":
                 for rid in self.target_ids:
-                    cursor.execute("INSERT OR REPLACE INTO role_multipliers (guild_id, role_id, multiplier) VALUES (?, ?, ?)", (interaction.guild.id, rid, val))
+                    role_multipliers_col.update_one({"guild_id": interaction.guild.id, "role_id": rid}, {"$set": {"multiplier": val}}, upsert=True)
             elif self.target_type == "channel":
                 for cid in self.target_ids:
-                    cursor.execute("INSERT OR REPLACE INTO channel_multipliers (guild_id, channel_id, multiplier) VALUES (?, ?, ?)", (interaction.guild.id, cid, val))
-            
-            conn.commit()
-            conn.close()
+                    channel_multipliers_col.update_one({"guild_id": interaction.guild.id, "channel_id": cid}, {"$set": {"multiplier": val}}, upsert=True)
 
             await interaction.response.send_message(embed=discord.Embed(title="✅ تم يا باشا", description=f"خلاص، تم تظبيط المضاعف على `x{val}` بنجاح!", color=0x00FF88), ephemeral=True)
         except ValueError:
@@ -455,12 +360,8 @@ class IgnoreRoleSelect(discord.ui.RoleSelect):
         super().__init__(placeholder="اختر الرتب المراد استبعادها من الـ XP", min_values=1, max_values=10, custom_id="sel_ignore_role_v11")
 
     async def callback(self, interaction: discord.Interaction):
-        conn = sqlite3.connect(LEVELS_DB_FILE)
-        cursor = conn.cursor()
         for r in self.values:
-            cursor.execute("INSERT OR IGNORE INTO ignored_roles (guild_id, role_id) VALUES (?, ?)", (interaction.guild.id, r.id))
-        conn.commit()
-        conn.close()
+            ignored_roles_col.update_one({"guild_id": interaction.guild.id, "role_id": r.id}, {"$set": {"role_id": r.id}}, upsert=True)
         await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
         await interaction.followup.send(embed=discord.Embed(title="✅ تم الاستبعاد", description="خلاص، تم استبعاد الرتب المحددة.", color=0x00FF88), ephemeral=True)
 
@@ -469,12 +370,8 @@ class IgnoreChannelSelect(discord.ui.ChannelSelect):
         super().__init__(placeholder="اختر الرومات المراد استبعادها من الـ XP", min_values=1, max_values=10, custom_id="sel_ignore_chan_v11")
 
     async def callback(self, interaction: discord.Interaction):
-        conn = sqlite3.connect(LEVELS_DB_FILE)
-        cursor = conn.cursor()
         for c in self.values:
-            cursor.execute("INSERT OR IGNORE INTO ignored_channels (guild_id, channel_id) VALUES (?, ?)", (interaction.guild.id, c.id))
-        conn.commit()
-        conn.close()
+            ignored_channels_col.update_one({"guild_id": interaction.guild.id, "channel_id": c.id}, {"$set": {"channel_id": c.id}}, upsert=True)
         await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
         await interaction.followup.send(embed=discord.Embed(title="✅ تم الاستبعاد", description="خلاص، تم استبعاد الرومات المحددة.", color=0x00FF88), ephemeral=True)
 
@@ -527,11 +424,11 @@ class LevelsRewardModal(discord.ui.Modal, title="🎁 إضافة رول مكاف
             if not interaction.guild.get_role(rid):
                 raise ValueError
 
-            conn = sqlite3.connect(LEVELS_DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("INSERT OR REPLACE INTO role_rewards (guild_id, level, role_id, req_type) VALUES (?, ?, ?, ?)", (interaction.guild.id, lvl, rid, req_type))
-            conn.commit()
-            conn.close()
+            role_rewards_col.update_one(
+                {"guild_id": interaction.guild.id, "level": lvl, "role_id": rid},
+                {"$set": {"req_type": req_type}},
+                upsert=True
+            )
 
             await interaction.response.edit_message(embed=generate_levels_panel_embed(interaction.guild), view=LevelsAdminPanelView())
             await interaction.followup.send(embed=discord.Embed(title="✅ يا سلام يا فنان", description=f"تم ربط المستوى `{lvl}` بالرتبة <@&{rid}>\n• **نوع التفاعل المطلوب:** {req_disp}", color=0x00FF88), ephemeral=True)
@@ -660,27 +557,27 @@ class TopLeaderboardView(discord.ui.View):
         if not self.guild:
             return []
         cfg = get_levels_settings(self.guild.id)
-        conn = sqlite3.connect(LEVELS_DB_FILE)
-        cursor = conn.cursor()
-        
         time_limit = int(time.time()) - (5 * 86400) if cfg["inactivity_decay_enabled"] else 0
 
+        query = {"guild_id": self.guild.id, "last_active_timestamp": {"$gte": time_limit}}
+        sort_field = "xp"
+
         if self.top_type == "voice":
-            cursor.execute("SELECT user_id, voice_xp, level FROM user_stats WHERE guild_id = ? AND last_active_timestamp >= ? ORDER BY voice_xp DESC", (self.guild.id, time_limit))
+            sort_field = "voice_xp"
         elif self.top_type == "reaction":
-            cursor.execute("SELECT user_id, reaction_xp, level FROM user_stats WHERE guild_id = ? AND last_active_timestamp >= ? ORDER BY reaction_xp DESC", (self.guild.id, time_limit))
+            sort_field = "reaction_xp"
         else:
             if self.timeframe == "day":
-                cursor.execute("SELECT user_id, day_text_xp, level FROM user_stats WHERE guild_id = ? AND last_active_timestamp >= ? ORDER BY day_text_xp DESC", (self.guild.id, time_limit))
+                sort_field = "day_text_xp"
             elif self.timeframe == "week":
-                cursor.execute("SELECT user_id, week_text_xp, level FROM user_stats WHERE guild_id = ? AND last_active_timestamp >= ? ORDER BY week_text_xp DESC", (self.guild.id, time_limit))
+                sort_field = "week_text_xp"
             elif self.timeframe == "month":
-                cursor.execute("SELECT user_id, month_text_xp, level FROM user_stats WHERE guild_id = ? AND last_active_timestamp >= ? ORDER BY month_text_xp DESC", (self.guild.id, time_limit))
+                sort_field = "month_text_xp"
             else:
-                cursor.execute("SELECT user_id, xp, level FROM user_stats WHERE guild_id = ? AND last_active_timestamp >= ? ORDER BY xp DESC", (self.guild.id, time_limit))
-        
-        rows = cursor.fetchall()
-        conn.close()
+                sort_field = "xp"
+
+        cursor = user_stats_col.find(query).sort(sort_field, -1)
+        rows = [(doc["user_id"], doc.get(sort_field, 0), doc.get("level", 0)) for doc in cursor]
         return rows
 
     def get_time_until_reset(self):
@@ -746,7 +643,7 @@ class TopLeaderboardView(discord.ui.View):
             description="\n".join(lines) if lines else "لا توجد بيانات تفاعل في هذه الصفحة.",
             color=0x2B2D31
         )
-        embed.set_footer(text=f"الصفحة {self.page + 1} من {(len(rows) - 1) // self.per_page + 1 if rows else 1}")
+        embed.set_footer(text=f"الصفحة {self.page + 1} من {(len(rows) - 1) // self.per_page + 1 if rows else 1} | {self.guild.name}")
         return embed
 
     @discord.ui.button(style=discord.ButtonStyle.primary, emoji="◀", custom_id="t_prev_v11")
@@ -787,17 +684,17 @@ class UltimateLevelsCog(commands.Cog):
         self.bot.add_view(MultiplierTypeSelectView())
 
     async def build_level_embed(self, guild: discord.Guild, target: discord.Member):
-        conn = sqlite3.connect(LEVELS_DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT xp, level, messages, voice_minutes FROM user_stats WHERE guild_id = ? AND user_id = ?", (guild.id, target.id))
-        row = cursor.fetchone()
+        doc = user_stats_col.find_one({"guild_id": guild.id, "user_id": target.id})
         
-        cursor.execute("SELECT user_id FROM user_stats WHERE guild_id = ? ORDER BY xp DESC", (guild.id,))
-        all_users = [r[0] for r in cursor.fetchall()]
+        all_cursor = user_stats_col.find({"guild_id": guild.id}).sort("xp", -1)
+        all_users = [d["user_id"] for d in all_cursor]
         rank = all_users.index(target.id) + 1 if target.id in all_users else "مش مضاف"
-        conn.close()
 
-        xp, lvl, msgs, v_mins = row if row else (0, 0, 0, 0)
+        xp = doc.get("xp", 0) if doc else 0
+        lvl = doc.get("level", 0) if doc else 0
+        msgs = doc.get("messages", 0) if doc else 0
+        v_mins = doc.get("voice_minutes", 0) if doc else 0
+
         req_xp = int((lvl + 1) * 300 + (lvl ** 1.2 * 120))
         cfg = get_levels_settings(guild.id)
 
@@ -859,22 +756,18 @@ class UltimateLevelsCog(commands.Cog):
         embed.add_field(name="🎁 ‹ رتب المكافآت المكتسبة ›", value=f"{earned_roles_str}", inline=False)
         embed.add_field(name="📈 ‹ شريط التقدم ›", value=f"{bar}", inline=False)
 
-        embed.set_footer(text=f"نظام التفاعل والمستويات | {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
+        embed.set_footer(text=f"{guild.name} ✦ Level System | {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
         return embed
 
     async def build_rewards_embed(self, guild: discord.Guild):
-        conn = sqlite3.connect(LEVELS_DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT level, role_id, req_type FROM role_rewards WHERE guild_id = ? ORDER BY level ASC", (guild.id,))
-        rows = cursor.fetchall()
-        conn.close()
+        rows = list(role_rewards_col.find({"guild_id": guild.id}).sort("level", 1))
 
         if not rows:
             return discord.Embed(title="🎁 لوحة المكافآت", description="لم يتم تعديل أو إضافة أي رتب مكافآت في النظام حتى الآن.", color=0xFF3333)
 
         lines = []
         for r in rows:
-            lvl, rid, rtype = r[0], r[1], r[2]
+            lvl, rid, rtype = r["level"], r["role_id"], r.get("req_type", "all")
             lines.append(f"• **المستوى {lvl}** ⟵ <@&{rid}> (النوع: `{rtype}`)")
 
         embed = discord.Embed(
@@ -883,27 +776,19 @@ class UltimateLevelsCog(commands.Cog):
             color=0x2B2D31,
             timestamp=datetime.datetime.utcnow()
         )
-        embed.set_footer(text="تفاعل واستمر عشان تاخد كل الرتب دي يا فنان!")
+        embed.set_footer(text=f"{guild.name} ✦ Rewards System")
         return embed
 
     @tasks.loop(minutes=1)
     async def periodic_reset_loop(self):
         now = datetime.datetime.now()
         if now.hour == 12 and now.minute == 0:
-            conn = sqlite3.connect(LEVELS_DB_FILE)
-            cursor = conn.cursor()
-            
-            cursor.execute("UPDATE user_stats SET day_text_xp = 0")
-            
+            user_stats_col.update_many({}, {"$set": {"day_text_xp": 0}})
             if now.weekday() == 4:
-                cursor.execute("UPDATE user_stats SET week_text_xp = 0")
-                
+                user_stats_col.update_many({}, {"$set": {"week_text_xp": 0}})
             next_day = now + datetime.timedelta(days=1)
             if next_day.day == 1:
-                cursor.execute("UPDATE user_stats SET month_text_xp = 0")
-
-            conn.commit()
-            conn.close()
+                user_stats_col.update_many({}, {"$set": {"month_text_xp": 0}})
 
     @periodic_reset_loop.before_loop
     async def before_periodic_reset(self):
@@ -935,18 +820,35 @@ class UltimateLevelsCog(commands.Cog):
 
                     base_xp = int(random.randint(cfg["min_voice_xp"], cfg["max_voice_xp"]) * mult)
                     now_ts = int(time.time())
-                    conn = sqlite3.connect(LEVELS_DB_FILE)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT xp, level, voice_xp, voice_minutes FROM user_stats WHERE guild_id = ? AND user_id = ?", (guild.id, m.id))
-                    row = cursor.fetchone()
-                    if not row:
-                        cursor.execute("INSERT INTO user_stats (guild_id, user_id, xp, level, voice_xp, voice_minutes, last_active_timestamp) VALUES (?, ?, ?, 0, ?, 1, ?)", (guild.id, m.id, base_xp, base_xp, now_ts))
+                    
+                    doc = user_stats_col.find_one({"guild_id": guild.id, "user_id": m.id})
+                    if not doc:
+                        new_data = {
+                            "guild_id": guild.id,
+                            "user_id": m.id,
+                            "xp": base_xp,
+                            "level": 0,
+                            "messages": 0,
+                            "voice_minutes": 1,
+                            "voice_xp": base_xp,
+                            "reaction_xp": 0,
+                            "day_text_xp": 0,
+                            "week_text_xp": 0,
+                            "month_text_xp": 0,
+                            "last_active_timestamp": now_ts
+                        }
+                        user_stats_col.insert_one(new_data)
+                        udata = {"xp": base_xp, "level": 0}
                     else:
-                        cursor.execute("UPDATE user_stats SET xp = ?, voice_xp = ?, voice_minutes = ?, last_active_timestamp = ? WHERE guild_id = ? AND user_id = ?", (row[0] + base_xp, row[2] + base_xp, row[3] + 1, now_ts, guild.id, m.id))
-                    conn.commit()
-                    conn.close()
+                        new_xp = doc.get("xp", 0) + base_xp
+                        new_v_xp = doc.get("voice_xp", 0) + base_xp
+                        new_v_mins = doc.get("voice_minutes", 0) + 1
+                        user_stats_col.update_one(
+                            {"guild_id": guild.id, "user_id": m.id},
+                            {"$set": {"xp": new_xp, "voice_xp": new_v_xp, "voice_minutes": new_v_mins, "last_active_timestamp": now_ts}}
+                        )
+                        udata = {"xp": new_xp, "level": doc.get("level", 0)}
 
-                    udata = {"xp": row[0] + base_xp if row else base_xp, "level": row[1] if row else 0}
                     await self.check_level_up(m, guild.id, udata, cfg, trigger_type="voice")
 
     @voice_tracker.before_loop
@@ -960,11 +862,7 @@ class UltimateLevelsCog(commands.Cog):
 
         if xp >= req_xp:
             new_lvl = lvl + 1
-            conn = sqlite3.connect(LEVELS_DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("UPDATE user_stats SET level = ? WHERE guild_id = ? AND user_id = ?", (new_lvl, gid, member.id))
-            conn.commit()
-            conn.close()
+            user_stats_col.update_one({"guild_id": gid, "user_id": member.id}, {"$set": {"level": new_lvl}})
 
             role_rewards = cfg.get("role_rewards", {})
             assigned_roles = role_rewards.get(str(new_lvl), [])
@@ -1028,7 +926,6 @@ class UltimateLevelsCog(commands.Cog):
         cfg = get_levels_settings(gid)
         clean_content = message.content.strip().lower()
 
-        # معالجة اختصارات الأوامر المباشرة في الشات
         if clean_content == cfg["shortcut_level"]:
             embed = await self.build_level_embed(message.guild, message.author)
             await message.channel.send(embed=embed)
@@ -1058,24 +955,38 @@ class UltimateLevelsCog(commands.Cog):
 
         base_xp = int(random.randint(cfg["min_text_xp"], cfg["max_text_xp"]) * mult)
         now_ts = int(time.time())
-        conn = sqlite3.connect(LEVELS_DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT xp, level, messages, day_text_xp, week_text_xp, month_text_xp FROM user_stats WHERE guild_id = ? AND user_id = ?", (gid, message.author.id))
-        row = cursor.fetchone()
-        if not row:
-            cursor.execute("INSERT INTO user_stats (guild_id, user_id, xp, level, messages, day_text_xp, week_text_xp, month_text_xp, last_active_timestamp) VALUES (?, ?, ?, 0, 1, ?, ?, ?, ?)", (gid, message.author.id, base_xp, base_xp, base_xp, base_xp, now_ts))
-            row = (base_xp, 0, 1, base_xp, base_xp, base_xp)
+        
+        doc = user_stats_col.find_one({"guild_id": gid, "user_id": message.author.id})
+        if not doc:
+            new_data = {
+                "guild_id": gid,
+                "user_id": message.author.id,
+                "xp": base_xp,
+                "level": 0,
+                "messages": 1,
+                "voice_minutes": 0,
+                "voice_xp": 0,
+                "reaction_xp": 0,
+                "day_text_xp": base_xp,
+                "week_text_xp": base_xp,
+                "month_text_xp": base_xp,
+                "last_active_timestamp": now_ts
+            }
+            user_stats_col.insert_one(new_data)
+            row_xp, row_lvl = base_xp, 0
         else:
-            new_xp = row[0] + base_xp
-            new_msgs = row[2] + 1
-            d_xp = row[3] + base_xp
-            w_xp = row[4] + base_xp
-            m_xp = row[5] + base_xp
-            cursor.execute("UPDATE user_stats SET xp = ?, messages = ?, day_text_xp = ?, week_text_xp = ?, month_text_xp = ?, last_active_timestamp = ? WHERE guild_id = ? AND user_id = ?", (new_xp, new_msgs, d_xp, w_xp, m_xp, now_ts, gid, message.author.id))
-        conn.commit()
-        conn.close()
+            new_xp = doc.get("xp", 0) + base_xp
+            new_msgs = doc.get("messages", 0) + 1
+            d_xp = doc.get("day_text_xp", 0) + base_xp
+            w_xp = doc.get("week_text_xp", 0) + base_xp
+            m_xp = doc.get("month_text_xp", 0) + base_xp
+            user_stats_col.update_one(
+                {"guild_id": gid, "user_id": message.author.id},
+                {"$set": {"xp": new_xp, "messages": new_msgs, "day_text_xp": d_xp, "week_text_xp": w_xp, "month_text_xp": m_xp, "last_active_timestamp": now_ts}}
+            )
+            row_xp, row_lvl = new_xp, doc.get("level", 0)
 
-        udata = {"xp": row[0] + base_xp, "level": row[1]}
+        udata = {"xp": row_xp, "level": row_lvl}
         await self.check_level_up(message.author, gid, udata, cfg, trigger_type="text")
 
     @app_commands.command(name="top", description="عرض المتصدرين في السيرفر")
