@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 import re
@@ -10,13 +9,30 @@ import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
-from pymongo import MongoClient
 from dotenv import load_dotenv
+from pymongo import MongoClient
 
 load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+log = logging.getLogger("ai_cog")
+
+
+def _env(name: str, default: str = "") -> str:
+    """قراءة متغير بيئة مع تنظيف المسافات وعلامات التنصيص الزايدة."""
+    return os.getenv(name, default).strip().strip('"').strip("'")
+
+
+# ==================== الإعدادات ====================
+GROQ_API_KEY = _env("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+
+# اختياري: لو حطيت مفتاح Gemini هيشتغل كاحتياطي لو Groq وقع
+GEMINI_API_KEY = _env("GEMINI_API_KEY")
+GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+# AI_DEBUG=1 يعرض سبب الفشل في الرد. بعد ما كل حاجة تشتغل خليه 0
+DEBUG_ERRORS = _env("AI_DEBUG", "1") == "1"
 
 TRIGGER = "يا ذكاء اصطناعي"
 HISTORY_LEN = 10
@@ -31,13 +47,17 @@ SYSTEM_PROMPT = (
     "استخدم تنسيق ماركداون بسيط (قوائم وأكواد عند الحاجة)."
 )
 
-# الاتصال بقاعدة بيانات MongoDB السحابية العامة
-MONGO_URI = os.getenv("MONGODB_URI")
-mongo_client = MongoClient(MONGO_URI)
-db = mongo_client["Global_Bot_DB"]
-ai_config_col = db["ai_system_config"]
-
-log = logging.getLogger("ai_cog")
+# ==================== MongoDB ====================
+MONGO_URI = _env("MONGODB_URI")
+ai_config_col = None
+if MONGO_URI:
+    try:
+        _mongo = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        ai_config_col = _mongo["Global_Bot_DB"]["ai_system_config"]
+    except Exception as e:
+        log.error("فشل الاتصال بـ MongoDB: %s", e)
+else:
+    log.warning("MONGODB_URI غير موجود، الإعدادات مش هتتحفظ بعد إعادة التشغيل.")
 
 
 def split_message(text: str, limit: int = DISCORD_LIMIT) -> list[str]:
@@ -68,32 +88,154 @@ class AICog(commands.Cog):
 
     async def cog_load(self):
         self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
-        if not GROQ_API_KEY:
-            log.warning("GROQ_API_KEY غير موجود في متغيرات البيئة! الذكاء الاصطناعي لن يرد.")
+        log.info(
+            "AI keys -> Groq: %s | Gemini: %s",
+            "موجود" if GROQ_API_KEY else "غير موجود",
+            "موجود" if GEMINI_API_KEY else "غير موجود",
+        )
 
     async def cog_unload(self):
         if self.session and not self.session.closed:
             await self.session.close()
 
-    # ---------- قاعدة بيانات MongoDB للإعدادات ----------
+    # ---------- قاعدة البيانات ----------
     def _load_config_db(self) -> dict:
-        doc = ai_config_col.find_one({"_id": "ai_config_main"})
-        if not doc:
-            initial_data = {
-                "_id": "ai_config_main",
-                "guilds": {}
-            }
-            ai_config_col.insert_one(initial_data)
+        if ai_config_col is None:
             return {}
-        return doc.get("guilds", {})
+        try:
+            doc = ai_config_col.find_one({"_id": "ai_config_main"})
+            if not doc:
+                ai_config_col.insert_one({"_id": "ai_config_main", "guilds": {}})
+                return {}
+            return doc.get("guilds", {})
+        except Exception as e:
+            log.error("فشل قراءة الإعدادات من MongoDB: %s", e)
+            return {}
+
+    def _save_config_sync(self):
+        if ai_config_col is None:
+            return
+        ai_config_col.update_one(
+            {"_id": "ai_config_main"},
+            {"$set": {"guilds": self.settings}},
+            upsert=True,
+        )
 
     async def save_config(self):
         async with self._save_lock:
-            ai_config_col.update_one(
-                {"_id": "ai_config_main"},
-                {"$set": {"guilds": self.settings}},
-                upsert=True
-            )
+            try:
+                # pymongo متزامن، فبنشغله في thread عشان ما يعطلش البوت
+                await asyncio.to_thread(self._save_config_sync)
+            except Exception as e:
+                log.error("فشل حفظ الإعدادات في MongoDB: %s", e)
+
+    # ---------- مزودو الذكاء الاصطناعي ----------
+    async def _call_groq(self, messages: list[dict]) -> tuple[str | None, str]:
+        if not GROQ_API_KEY:
+            return None, "Groq: المفتاح GROQ_API_KEY غير موجود (اتأكد من ملف .env أو متغيرات الاستضافة)"
+
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+        last_error = "Groq: فشل غير معروف"
+
+        for model in GROQ_MODELS:
+            payload = {"model": model, "messages": messages, "temperature": 0.7, "max_tokens": 1024}
+            for attempt in range(2):
+                try:
+                    async with self.session.post(GROQ_URL, headers=headers, json=payload) as resp:
+                        if resp.status == 200:
+                            data = await resp.json(content_type=None)
+                            text = (data["choices"][0]["message"]["content"] or "").strip()
+                            if text:
+                                return text, ""
+                            last_error = f"Groq ({model}): رد فاضي"
+                            break
+                        body = (await resp.text())[:200].replace("\n", " ")
+                        last_error = f"Groq {resp.status} ({model}): {body}"
+                        log.warning(last_error)
+                        if resp.status in (401, 403):
+                            return None, last_error  # مفتاح مرفوض أو IP محجوب
+                        if resp.status == 429 or resp.status >= 500:
+                            await asyncio.sleep(1.5 * (attempt + 1))
+                            continue
+                        break
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    last_error = f"Groq اتصال: {type(e).__name__}: {e}"
+                    log.warning(last_error)
+                    await asyncio.sleep(1)
+                except (KeyError, IndexError, ValueError) as e:
+                    last_error = f"Groq رد غير متوقع: {e}"
+                    log.error(last_error)
+                    break
+        return None, last_error
+
+    async def _call_gemini(self, messages: list[dict]) -> tuple[str | None, str]:
+        if not GEMINI_API_KEY:
+            return None, "Gemini: المفتاح غير موجود"
+
+        system_text = messages[0]["content"]
+        contents = [
+            {"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
+            for m in messages[1:]
+        ]
+        payload = {
+            "system_instruction": {"parts": [{"text": system_text}]},
+            "contents": contents,
+            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024},
+        }
+        headers = {"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"}
+        url = GEMINI_URL.format(model=GEMINI_MODEL)
+
+        for attempt in range(2):
+            try:
+                async with self.session.post(url, headers=headers, json=payload) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        parts = data["candidates"][0]["content"]["parts"]
+                        text = "".join(p.get("text", "") for p in parts).strip()
+                        if text:
+                            return text, ""
+                        return None, "Gemini: رد فاضي"
+                    body = (await resp.text())[:200].replace("\n", " ")
+                    err = f"Gemini {resp.status} ({GEMINI_MODEL}): {body}"
+                    log.warning(err)
+                    if resp.status == 429 or resp.status >= 500:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+                        continue
+                    return None, err
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                err = f"Gemini اتصال: {type(e).__name__}: {e}"
+                log.warning(err)
+                await asyncio.sleep(1)
+            except (KeyError, IndexError, ValueError) as e:
+                err = f"Gemini رد غير متوقع: {e}"
+                log.error(err)
+                return None, err
+        return None, err
+
+    async def _generate(self, messages: list[dict]) -> tuple[str | None, str]:
+        if self.session is None:
+            return None, "الجلسة غير مفعّلة"
+        errors = []
+        for provider in (self._call_groq, self._call_gemini):
+            text, err = await provider(messages)
+            if text:
+                return text, ""
+            errors.append(err)
+        return None, "\n".join(errors)
+
+    async def get_ai_response(self, key: tuple[int, int], prompt: str) -> tuple[str | None, str]:
+        messages = (
+            [{"role": "system", "content": SYSTEM_PROMPT}]
+            + list(self.history[key])
+            + [{"role": "user", "content": prompt}]
+        )
+        text, err = await self._generate(messages)
+        if text:
+            self.history[key].append({"role": "user", "content": prompt})
+            self.history[key].append({"role": "assistant", "content": text})
+            if len(self.history) > 1000:
+                self.history.clear()
+        return text, err
 
     # ---------- أوامر السلاش ----------
     @app_commands.command(name="ai", description="[إدارة] التحكم في الذكاء الاصطناعي داخل هذه القناة")
@@ -132,6 +274,29 @@ class AICog(commands.Cog):
 
         await interaction.response.send_message(msg, ephemeral=True)
 
+    @app_commands.command(name="ai_test", description="[إدارة] اختبار الاتصال بالذكاء الاصطناعي ومعرفة سبب أي مشكلة")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    async def ai_test(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        lines = [
+            f"Groq: {'✅ مفتاح موجود' if GROQ_API_KEY else '❌ مفتاح غير موجود'}"
+            + (f" (طوله {len(GROQ_API_KEY)}، {'يبدأ بـ gsk_ ✅' if GROQ_API_KEY.startswith('gsk_') else 'لا يبدأ بـ gsk_ ❌'})" if GROQ_API_KEY else ""),
+            f"Gemini: {'✅ مفتاح موجود' if GEMINI_API_KEY else '➖ غير مستخدم'}",
+            f"MongoDB: {'✅ متصل' if ai_config_col is not None else '❌ غير مفعّل'}",
+            "",
+        ]
+        text, err = await self._generate([
+            {"role": "system", "content": "رد بكلمة واحدة فقط."},
+            {"role": "user", "content": "قل: يعمل"},
+        ])
+        if text:
+            lines.append(f"✅ الاتصال شغال! رد الذكاء الاصطناعي: {text[:100]}")
+        else:
+            lines.append(f"❌ فشل الاتصال:\n```{err[:900]}```")
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+
     @app_commands.command(name="ai_reset", description="مسح ذاكرة المحادثة بينك وبين الذكاء الاصطناعي في هذه القناة")
     @app_commands.guild_only()
     async def ai_reset(self, interaction: discord.Interaction):
@@ -148,61 +313,6 @@ class AICog(commands.Cog):
             await interaction.followup.send(text, ephemeral=True)
         else:
             await interaction.response.send_message(text, ephemeral=True)
-
-    # ---------- الاتصال بـ Groq ----------
-    async def get_ai_response(self, key: tuple[int, int], prompt: str) -> str | None:
-        if not GROQ_API_KEY or self.session is None:
-            return None
-
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        messages = (
-            [{"role": "system", "content": SYSTEM_PROMPT}]
-            + list(self.history[key])
-            + [{"role": "user", "content": prompt}]
-        )
-
-        for model in MODELS:
-            payload = {
-                "model": model,
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": 1024,
-            }
-            for attempt in range(3):
-                try:
-                    async with self.session.post(GROQ_URL, headers=headers, json=payload) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            reply = (data["choices"][0]["message"]["content"] or "").strip()
-                            if reply:
-                                self.history[key].append({"role": "user", "content": prompt})
-                                self.history[key].append({"role": "assistant", "content": reply})
-                                if len(self.history) > 1000:
-                                    self.history.clear()
-                                return reply
-                            break
-
-                        body = (await resp.text())[:300]
-                        log.warning("Groq %s (model=%s, attempt=%d): %s", resp.status, model, attempt + 1, body)
-
-                        if resp.status in (401, 403):
-                            return None
-                        if resp.status == 429 or resp.status >= 500:
-                            retry_after = resp.headers.get("retry-after")
-                            delay = min(float(retry_after), 8) if retry_after and retry_after.replace(".", "", 1).isdigit() else 1.5 * (attempt + 1)
-                            await asyncio.sleep(delay)
-                            continue
-                        break
-                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                    log.warning("خطأ اتصال (model=%s, attempt=%d): %s", model, attempt + 1, e)
-                    await asyncio.sleep(1.5 * (attempt + 1))
-                except (KeyError, IndexError, ValueError) as e:
-                    log.error("رد غير متوقع من Groq: %s", e)
-                    break
-        return None
 
     # ---------- الرد التلقائي ----------
     @commands.Cog.listener()
@@ -246,10 +356,12 @@ class AICog(commands.Cog):
         key = (message.channel.id, message.author.id)
 
         async with message.channel.typing():
-            reply = await self.get_ai_response(key, clean)
+            reply, err = await self.get_ai_response(key, clean)
 
         if reply is None:
-            reply = "⚠️ عذراً، مش قادر أوصل للذكاء الاصطناعي دلوقتي. جرب تاني بعد شوية."
+            reply = "⚠️ مش قادر أوصل للذكاء الاصطناعي دلوقتي."
+            if DEBUG_ERRORS and err:
+                reply += f"\n```{err[:600]}```"
 
         chunks = split_message(reply)
         await message.reply(chunks[0], allowed_mentions=no_ping, mention_author=False)
@@ -260,7 +372,7 @@ class AICog(commands.Cog):
     @commands.command(name="ai_ping")
     async def ai_ping(self, ctx: commands.Context):
         status = "✅ موجود" if GROQ_API_KEY else "❌ غير موجود"
-        await ctx.send(f"Pong! 🏓 البوت شغال في سيرفر **{ctx.guild.name}**. مفتاح Groq: {status}")
+        await ctx.send(f"Pong! 🏓 البوت شغال. مفتاح Groq: {status}")
 
 
 async def setup(bot: commands.Bot):
