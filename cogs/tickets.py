@@ -2,25 +2,38 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 import datetime
-import json
 import os
 import io
 import asyncio
+from pymongo import MongoClient
+from dotenv import load_dotenv
 
-TICKETS_DB_FILE = "ultimate_tickets_database.json"
+load_dotenv()
+MONGO_URI = os.getenv("MONGODB_URI")
+
+# الاتصال بقاعدة بيانات MongoDB السحابية
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client["ZeroPro_Tickets_DB"]
+
+tickets_col = db["tickets_data"]
 
 def load_tickets_db():
-    if os.path.exists(TICKETS_DB_FILE):
-        try:
-            with open(TICKETS_DB_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
+    doc = tickets_col.find_one({"_id": "main_db"})
+    if not doc:
+        initial_data = {
+            "_id": "main_db",
+            "guilds": {}
+        }
+        tickets_col.insert_one(initial_data)
+        return {}
+    return doc.get("guilds", {})
 
-def save_tickets_db(data):
-    with open(TICKETS_DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+def save_tickets_db(guilds_data):
+    tickets_col.update_one(
+        {"_id": "main_db"},
+        {"$set": {"guilds": guilds_data}},
+        upsert=True
+    )
 
 
 # ==============================================================================
@@ -67,12 +80,17 @@ class TicketRatingView(discord.ui.View):
         guild_id_str = str(interaction.guild.id)
         t_info = db.get(guild_id_str, {}).get("active_tickets", {}).get(str(target_chan.id), {})
         claimer_id = t_info.get("claimed_by")
+        
         if claimer_id:
+            if guild_id_str not in db:
+                db[guild_id_str] = {}
             if "staff_stats" not in db[guild_id_str]:
                 db[guild_id_str]["staff_stats"] = {}
+            
             c_str = str(claimer_id)
             if c_str not in db[guild_id_str]["staff_stats"]:
                 db[guild_id_str]["staff_stats"][c_str] = {"claimed": 0, "total_stars": 0, "ratings_count": 0}
+            
             db[guild_id_str]["staff_stats"][c_str]["total_stars"] += stars
             db[guild_id_str]["staff_stats"][c_str]["ratings_count"] += 1
             save_tickets_db(db)
@@ -134,7 +152,6 @@ class DeleteReasonModal(discord.ui.Modal, title="🗑️ سبب حذف التذ�
             guild_data["closed_tickets_archive"].append(ticket_data)
             save_tickets_db(db)
 
-            # إرسال الترانسكريبت إلى روم اللوج
             messages_history = []
             try:
                 async for msg in channel.history(limit=500, oldest_first=True):
@@ -173,7 +190,6 @@ class DeleteReasonModal(discord.ui.Modal, title="🗑️ سبب حذف التذ�
                     except:
                         pass
 
-        # إرسال رسالة سبب الحذف وإتاحة التقييم مباشرة للعضو
         creator_id_val = ticket_data.get("user_id", interaction.user.id) if ticket_data else interaction.user.id
         
         embed_reason_msg = discord.Embed(
@@ -192,7 +208,7 @@ class DeleteReasonModal(discord.ui.Modal, title="🗑️ سبب حذف التذ�
 
 
 # ==============================================================================
-# 🔒 خيارات قفل/فتح التذكرة (مع مهلة حماية 5 ثوانٍ)
+# 🔒 خيارات قفل/فتح التذكرة (مع إدارة الروم الصوتية التلقائية)
 # ==============================================================================
 class CloseConfirmationView(discord.ui.View):
     def __init__(self, closed_timestamp: float = 0):
@@ -219,6 +235,15 @@ class CloseConfirmationView(discord.ui.View):
         t_info["status"] = "مفتوحة"
         save_tickets_db(db)
 
+        # إعادة تفعيل الصلاحيات العادية للعضو عند إعادة الفتح
+        creator_id = t_info.get("user_id")
+        creator = interaction.guild.get_member(creator_id)
+        if creator:
+            try:
+                await interaction.channel.set_permissions(creator, send_messages=True, view_channel=True)
+            except:
+                pass
+
         embed_reopened = discord.Embed(
             title="🔓 تم إعادة فتح التذكرة",
             description=f"تم فتح التذكرة بواسطة {interaction.user.mention}.",
@@ -242,7 +267,6 @@ class CloseConfirmationView(discord.ui.View):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        # فتح المودال للإداري ليكتب سبب الحذف
         await interaction.response.send_modal(DeleteReasonModal())
 
 
@@ -280,6 +304,10 @@ class QuickRepliesSelect(discord.ui.Select):
         channel_id_str = str(interaction.channel.id)
         t_info = db.get(guild_id_str, {}).get("active_tickets", {}).get(channel_id_str, {})
         
+        if t_info.get("status") == "مغلقة":
+            await interaction.response.send_message("❌ التذكرة مغلقة، لا يمكن استخدام الردود السريعة حالياً.", ephemeral=True)
+            return
+
         support_role_ids = t_info.get("support_role_ids", [])
         is_staff = interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_guild
         if not is_staff and support_role_ids:
@@ -404,6 +432,10 @@ class TicketInsideView(discord.ui.View):
 
         ticket_info = active_tickets[channel_id_str]
         
+        if ticket_info.get("status") == "مغلقة":
+            await interaction.response.send_message("❌ التذكرة مغلقة، لا يمكن استلامها.", ephemeral=True)
+            return
+
         creator_id = ticket_info.get("user_id")
         if interaction.user.id == creator_id:
             embed_creator_err = discord.Embed(
@@ -415,7 +447,6 @@ class TicketInsideView(discord.ui.View):
             return
 
         support_role_ids = ticket_info.get("support_role_ids", [])
-        
         is_staff = interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_guild
         if not is_staff and support_role_ids:
             if any(role.id in support_role_ids for role in interaction.user.roles):
@@ -504,6 +535,10 @@ class TicketInsideView(discord.ui.View):
         db = load_tickets_db()
         t_info = db.get(str(interaction.guild.id), {}).get("active_tickets", {}).get(str(interaction.channel.id), {})
         
+        if t_info.get("status") == "مغلقة":
+            await interaction.response.send_message("❌ التذكرة مغلقة، لا يمكن إضافة أعضاء.", ephemeral=True)
+            return
+
         if interaction.user.id == t_info.get("user_id"):
             embed_err = discord.Embed(
                 title="❌ غير مسموح",
@@ -517,6 +552,13 @@ class TicketInsideView(discord.ui.View):
 
     @discord.ui.button(label="غرفة صوتية", style=discord.ButtonStyle.success, emoji="🔊", custom_id="create_temp_voice_btn_v7", row=2)
     async def create_temp_voice(self, interaction: discord.Interaction, button: discord.ui.Button):
+        db = load_tickets_db()
+        t_info = db.get(str(interaction.guild.id), {}).get("active_tickets", {}).get(str(interaction.channel.id), {})
+        
+        if t_info.get("status") == "مغلقة":
+            await interaction.response.send_message("❌ التذكرة مغلقة، لا يمكن إنشاء غرفة صوتية.", ephemeral=True)
+            return
+
         guild = interaction.guild
         category = interaction.channel.category
         
@@ -525,8 +567,6 @@ class TicketInsideView(discord.ui.View):
             interaction.user: discord.PermissionOverwrite(connect=True, speak=True, view_channel=True)
         }
         
-        db = load_tickets_db()
-        t_info = db.get(str(guild.id), {}).get("active_tickets", {}).get(str(interaction.channel.id), {})
         t_info["last_activity"] = datetime.datetime.utcnow().timestamp()
         save_tickets_db(db)
 
@@ -562,8 +602,8 @@ class TicketInsideView(discord.ui.View):
         channel_id_str = str(interaction.channel.id)
         ticket_info = db.get(guild_id_str, {}).get("active_tickets", {}).get(channel_id_str, {})
         
-        if not ticket_info:
-            embed_err = discord.Embed(title="❌ خطأ", description="مش قادرين نقرأ بيانات التذكرة.", color=0xFF3333)
+        if not ticket_info or ticket_info.get("status") == "مغلقة":
+            embed_err = discord.Embed(title="❌ خطأ", description="التذكرة مغلقة أو غير متاحة للتنبيه.", color=0xFF3333)
             await interaction.response.send_message(embed=embed_err, ephemeral=True)
             return
 
@@ -596,12 +636,15 @@ class TicketInsideView(discord.ui.View):
         guild_id_str = str(interaction.guild.id)
         channel_id_str = str(interaction.channel.id)
         ticket_info = db.get(guild_id_str, {}).get("active_tickets", {}).get(channel_id_str, {})
-        if ticket_info:
-            ticket_info["last_activity"] = datetime.datetime.utcnow().timestamp()
-            save_tickets_db(db)
+        
+        if not ticket_info or ticket_info.get("status") == "مغلقة":
+            await interaction.response.send_message("❌ التذكرة مغلقة.", ephemeral=True)
+            return
+
+        ticket_info["last_activity"] = datetime.datetime.utcnow().timestamp()
+        save_tickets_db(db)
 
         higher_role_id = ticket_info.get("higher_support_role_id")
-        
         if higher_role_id:
             mentions = f"<@&{higher_role_id}>"
         else:
@@ -617,13 +660,44 @@ class TicketInsideView(discord.ui.View):
     @discord.ui.button(label="إغلاق التذكرة", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="close_ticket_v7_btn", row=3)
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = load_tickets_db()
-        t_info = db.get(str(interaction.guild.id), {}).get("active_tickets", {}).get(str(interaction.channel.id))
-        if t_info:
-            t_info["last_activity"] = datetime.datetime.utcnow().timestamp()
-            save_tickets_db(db)
+        guild_id_str = str(interaction.guild.id)
+        channel_id_str = str(interaction.channel.id)
+        t_info = db.get(guild_id_str, {}).get("active_tickets", {}).get(channel_id_str)
+        
+        if not t_info:
+            await interaction.response.send_message("❌ التذكرة غير مسجلة.", ephemeral=True)
+            return
+
+        if t_info.get("status") == "مغلقة":
+            await interaction.response.send_message("❌ التذكرة مغلقة بالفعل.", ephemeral=True)
+            return
+
+        t_info["status"] = "مغلقة"
+        t_info["last_activity"] = datetime.datetime.utcnow().timestamp()
+
+        # إزالة صلاحية الكتابة عن صاحب التذكرة وحذف روم الصوت إن وجدت تلقائياً
+        creator_id = t_info.get("user_id")
+        creator = interaction.guild.get_member(creator_id)
+        if creator:
+            try:
+                await interaction.channel.set_permissions(creator, send_messages=False)
+            except:
+                pass
+
+        voice_chan_id = t_info.get("temp_voice_id")
+        if voice_chan_id:
+            v_chan = interaction.guild.get_channel(int(voice_chan_id))
+            if v_chan:
+                try:
+                    await v_chan.delete()
+                except:
+                    pass
+            t_info.pop("temp_voice_id", None)
+
+        save_tickets_db(db)
 
         closed_time = datetime.datetime.utcnow().timestamp()
-        embed_close = discord.Embed(title="🔒 تم إغلاق التذكرة", description="اختر الخيار المناسب لتنفيذه:", color=0x2B2D31)
+        embed_close = discord.Embed(title="🔒 تم إغلاق التذكرة وحذف الروم الصوتي تلقائياً", description="اختر الخيار المناسب لتنفيذه:", color=0x2B2D31)
         await interaction.channel.send(embed=embed_close, view=CloseConfirmationView(closed_timestamp=closed_time))
         await interaction.response.send_message("✅ تم إغلاق التذكرة بنجاح.", ephemeral=True)
 
@@ -821,7 +895,7 @@ async def create_user_ticket_execution(interaction: discord.Interaction, panel_n
     
     active_tickets = guild_data.get("active_tickets", {})
     for ch_id, t_info in active_tickets.items():
-        if t_info.get("user_id") == interaction.user.id:
+        if t_info.get("user_id") == interaction.user.id and t_info.get("status") != "مغلقة":
             existing_chan = guild.get_channel(int(ch_id))
             if existing_chan:
                 try:
