@@ -3,3 +3,5 @@ PyNaCl
 requests
 python-dotenv
 PyGithub
+pymongo
+dnspython
