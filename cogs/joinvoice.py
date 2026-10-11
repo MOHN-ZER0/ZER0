@@ -10,9 +10,9 @@ from dotenv import load_dotenv
 load_dotenv()
 MONGO_URI = os.getenv("MONGODB_URI")
 
-# الاتصال بقاعدة بيانات MongoDB السحابية
+# الاتصال بقاعدة بيانات MongoDB السحابية العامة
 mongo_client = MongoClient(MONGO_URI)
-db = mongo_client["ZeroPro_Tickets_DB"]
+db = mongo_client["Global_Bot_DB"]
 voice_col = db["voice_presence_data"]
 
 def load_db():
@@ -48,8 +48,9 @@ class VoiceControlView(discord.ui.View):
             return
 
         guild = interaction.guild
-        if guild.voice_client:
-            # مسح الحفظ من الداتا بيز أولاً حتى لا يقوم نظام الحماية التلقائي بإعادة إدخال البوت
+        guild_name = guild.name if guild else "Server"
+        
+        if guild and guild.voice_client:
             data = load_db()
             guild_id_str = str(guild.id)
             if guild_id_str in data:
@@ -69,7 +70,7 @@ class VoiceControlView(discord.ui.View):
                 timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
             embed.add_field(name="🛡️ ╎ بواسطة الإداري", value=f"> ｢ {interaction.user.mention} ｣", inline=False)
-            embed.set_footer(text=f"{guild.name} ✦ Voice System")
+            embed.set_footer(text=f"{guild_name} ✦ Voice System")
             
             for child in self.children:
                 child.disabled = True
@@ -151,7 +152,6 @@ class VoicePresenceCog(commands.Cog):
             data = load_db()
             target_channel_id = data.get(guild_id_str)
 
-            # إذا لم تكن هناك روم صوتية محفوظة لهذا السيرفر، يتجاهل الحدث
             if not target_channel_id:
                 return
 
@@ -159,10 +159,10 @@ class VoicePresenceCog(commands.Cog):
             if not target_channel:
                 return
 
-            # الحالة 1: البوت اتفصل تماماً من الفويس (سواء طرد، انقطاع سيرفر، إلخ)
+            # الحالة 1: خروج أو طرد البوت من الروم الصوتي
             if before.channel and not after.channel:
-                await asyncio.sleep(2)  # انتظر ثانيتين للتأكد
-                data_check = load_db()  # التأكد أن الحفظ لم يُحذف عبر زر المغادرة المخصص
+                await asyncio.sleep(2)
+                data_check = load_db()
                 if guild_id_str in data_check:
                     try:
                         if not member.guild.voice_client:
@@ -170,7 +170,7 @@ class VoicePresenceCog(commands.Cog):
                     except Exception:
                         pass
 
-            # الحالة 2: شخص نقل البوت لروم صوتية تانية غير الروم المحفوظة
+            # الحالة 2: نقل البوت لروم صوتية تانية غير المحددة
             elif after.channel and after.channel.id != int(target_channel_id):
                 await asyncio.sleep(1)
                 try:
@@ -198,6 +198,7 @@ class VoicePresenceCog(commands.Cog):
             return
 
         guild_id_str = str(interaction.guild.id)
+        guild_name = interaction.guild.name
         data = load_db()
         data[guild_id_str] = target_channel.id
         save_db(data)
@@ -223,7 +224,7 @@ class VoicePresenceCog(commands.Cog):
             embed.add_field(name="🔊 ╎ الـروم الصـوتـي", value=f"> ｢ {target_channel.mention} ｣", inline=False)
             embed.add_field(name="🛡 ╎ بـواسـطـة", value=f"> ｢ {interaction.user.mention} ｣", inline=False)
             embed.add_field(name="📌 ╎ الحـالـة", value=f"> ｢ {action_status} ｣", inline=False)
-            embed.set_footer(text=f"{interaction.guild.name} ✦ Voice Presence Engine 24/7")
+            embed.set_footer(text=f"{guild_name} ✦ Voice Presence Engine 24/7")
             
             view = VoiceControlView(self, interaction.guild.id)
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
@@ -242,6 +243,7 @@ class VoicePresenceCog(commands.Cog):
     async def leavevc(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         guild_id_str = str(interaction.guild.id)
+        guild_name = interaction.guild.name
         
         if interaction.guild.voice_client:
             data = load_db()
@@ -262,7 +264,7 @@ class VoicePresenceCog(commands.Cog):
                 timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
             embed.add_field(name="🛡️ ╎ بواسطة الإداري", value=f"> ｢ {interaction.user.mention} ｣", inline=False)
-            embed.set_footer(text=f"{interaction.guild.name} ✦ Voice System")
+            embed.set_footer(text=f"{guild_name} ✦ Voice System")
             await interaction.followup.send(embed=embed, ephemeral=True)
         else:
             await interaction.followup.send("❌ البوت غير متصل بأي روم صوتي في هذا السيرفر أساساً!", ephemeral=True)
