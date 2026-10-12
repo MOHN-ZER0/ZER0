@@ -2,20 +2,65 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import datetime
+import os
+from pymongo import MongoClient
+from dotenv import load_dotenv
+
+# تحميل متغيرات البيئة للاتصال بقاعدة البيانات السحابية
+load_dotenv()
+MONGO_URI = os.getenv("MONGODB_URI")
+
+# الاتصال بقاعدة بيانات MongoDB السحابية العامة
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client["Global_Bot_DB"]
+analytics_col = db["server_info_analytics"]
+
+def log_serverinfo_usage(guild_id: int, guild_name: str, user_id: int, member_count: int):
+    """حفظ إحصائيات استخدام الأمر في قاعدة البيانات السحابية"""
+    try:
+        analytics_col.update_one(
+            {"_id": str(guild_id)},
+            {
+                "$set": {
+                    "guild_name": guild_name,
+                    "last_member_count": member_count,
+                    "last_used_at": datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                },
+                "$inc": {"total_command_uses": 1},
+                "$push": {
+                    "usage_history": {
+                        "user_id": user_id,
+                        "used_at": datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                    }
+                }
+            },
+            upsert=True
+        )
+    except Exception as e:
+        print(f"[MongoDB Error] ServerInfo Logging Failed: {e}")
 
 class ServerInfoCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="serverinfo", description="[معلومات] عرض لوحة معلومات وإحصائيات سيرفر ZIUO الشاملة والعملاقة")
+    @app_commands.command(name="serverinfo", description="[معلومات] عرض لوحة معلومات وإحصائيات السيرفر الشاملة والعملاقة")
     async def serverinfo(self, interaction: discord.Interaction):
-        # الرد بشكل مبدئي وبسرعة لمنع تعليق ديسكورد
+        # الرد بشكل مبدئي وبسرعة لمنع تعليق ديسكورد (The application did not respond)
         await interaction.response.defer(ephemeral=False)
         
         g = interaction.guild
+        if not g:
+            await interaction.followup.send("❌ هذا الأمر يعمل فقط داخل السيرفرات!", ephemeral=True)
+            return
+
+        guild_name = g.name
+        bot_name = self.bot.user.name if self.bot.user else "Bot"
         
-        # إحصائيات الأعضاء الأساسية المتاحة مباشرة بدون كاش ثقيل
+        # إحصائيات الأعضاء الأساسية
         total_members = g.member_count or 0
+        
+        # تسجيل الاستخدام وحفظ بيانات السيرفر في قاعدة البيانات السحابية
+        log_serverinfo_usage(g.id, guild_name, interaction.user.id, total_members)
         
         # حساب الرومات بدقة وأمان
         text_channels = len(g.text_channels)
@@ -60,29 +105,30 @@ class ServerInfoCog(commands.Cog):
 
         # معلومات البوست (Boost Info)
         boost_tier = g.premium_tier
-        boost_count = g.premium_subscription_count
+        boost_count = g.premium_subscription_count or 0
         
         # محاولة جلب المالك بأمان تام بدون تعليق
         try:
             owner = g.owner or await g.fetch_member(g.owner_id)
             owner_mention = owner.mention if owner else f"مستخدِم (`{g.owner_id}`)"
-        except:
+        except Exception:
             owner_mention = f"مستخدِم (`{g.owner_id}`)"
 
         # حساب شريط التقدم للبوستات
-        next_goal_text = "الحد الأقصى متاح 🚀"
         if boost_tier == 0:
             next_goal_text = f"متبقي {max(0, 2 - boost_count)} بوست للوصول للمستوى 1"
         elif boost_tier == 1:
             next_goal_text = f"متبقي {max(0, 7 - boost_count)} بوست للوصول للمستوى 2"
         elif boost_tier == 2:
             next_goal_text = f"متبقي {max(0, 14 - boost_count)} بوست للوصول للمستوى 3"
+        else:
+            next_goal_text = "الحد الأقصى متاح 🚀"
 
         embed = discord.Embed(
-            title="📇 ╎ مـعـلـومـات سـيـرفـر ZIUO - MC 〣 ｢🛡️｣",
+            title=f"📇 ╎ مـعـلـومـات سـيـرفـر {guild_name} 〣 ｢🛡️｣",
             description=f"> لوحة القيادة المركزية وإحصائيات السيرفر الرسمية والمحدثة بكافة التفاصيل والخصائص العميقـة ⚡.\n━━━━━━━━━━━━━━━━━━━━━",
             color=0x2b2d31,
-            timestamp=datetime.datetime.utcnow()
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         
         if g.icon:
@@ -144,7 +190,7 @@ class ServerInfoCog(commands.Cog):
             inline=False
         )
         
-        embed.set_footer(text="Z I UO - MC Server ✦ Enhanced Server Dashboard", icon_url=g.icon.url if g.icon else None)
+        embed.set_footer(text=f"{guild_name} ✦ {bot_name} Enhanced Dashboard", icon_url=g.icon.url if g.icon else None)
         
         await interaction.followup.send(embed=embed)
 
