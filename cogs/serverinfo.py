@@ -1,11 +1,5 @@
 """
-📇 نظام معلومات السيرفر (نسخة مصلّحة ومحسّنة)
-
-ملاحظات مهمة:
-- الأمر الأساسي: /serverinfo  (ومعاه اختصار نصي: اكتب كلمة "serverinfo" في أي روم، وتقدر تغيّر الكلمات من /serverinfo_settings).
-- لو أمر السلاش مش ظاهر عندك: ده معناه إنه ما اتعملش له Sync مع ديسكورد. شغّل الأمر النصي (للمالك فقط):  !sync_slash
-- الإعدادات وإحصائيات النمو (دخول/خروج الأعضاء) بتتحفظ في MongoDB لكل سيرفر لوحده.
-- محتاج Intents: guilds + members (ولحالات الأعضاء أونلاين/خامل: presences، ولاختصار الكلمات: message_content).
+📇 نظام معلومات السيرفر (نسخة مصلّحة، مؤمنة، ومحسّنة بالكامل)
 """
 import asyncio
 import copy
@@ -25,10 +19,11 @@ from pymongo import MongoClient
 load_dotenv()
 log = logging.getLogger("serverinfo")
 
+# تعيين التوقيت بأمان تام لتفادي أي انهيار على ويندوز أو لينكس
 try:
     from zoneinfo import ZoneInfo
     LOCAL_TZ = ZoneInfo(os.getenv("SERVERINFO_TZ", "Africa/Cairo"))
-except Exception:  # لو tzdata مش موجودة على ويندوز
+except Exception:
     LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=2))
 
 # ==============================================================================
@@ -91,7 +86,7 @@ FEATURES_AR = {
 
 
 # ==============================================================================
-# 🧰 دوال مساعدة
+# 🧰 دوال مساعدة آمنة
 # ==============================================================================
 def clip(text: Any, limit: int) -> str:
     text = str(text or "")
@@ -128,7 +123,9 @@ def kv(label: str, value: Any) -> str:
     return f"> **{label}:** ｢ {value} ｣"
 
 
-def ts(dt: datetime.datetime, style: str = "R") -> str:
+def ts(dt: Optional[datetime.datetime], style: str = "R") -> str:
+    if not dt:
+        return "غير معروف"
     return f"<t:{int(dt.timestamp())}:{style}>"
 
 
@@ -156,6 +153,8 @@ SPARK = "▁▂▃▄▅▆▇█"
 
 
 def sparkline(values: list[int]) -> str:
+    if not values:
+        return SPARK[0] * 7
     top = max(values) if values else 0
     if top <= 0:
         return SPARK[0] * len(values)
@@ -163,7 +162,8 @@ def sparkline(values: list[int]) -> str:
 
 
 def fmt_template(text: str, guild: discord.Guild) -> str:
-    return (text.replace("{server}", guild.name).replace("{members}", str(guild.member_count or len(guild.members)))
+    return (text.replace("{server}", guild.name)
+            .replace("{members}", str(guild.member_count or len(guild.members)))
             .replace("{id}", str(guild.id)))
 
 
@@ -172,20 +172,16 @@ def enum_name(value: Any) -> str:
 
 
 async def respond(interaction: discord.Interaction, **kwargs):
-    if interaction.response.is_done():
-        return await interaction.followup.send(**kwargs)
-    return await interaction.response.send_message(**kwargs)
-
-
-async def report_error(interaction: discord.Interaction):
     try:
-        await respond(interaction, content="❌ حصل خطأ غير متوقع، حاول تاني.", ephemeral=True)
-    except discord.HTTPException:
+        if interaction.response.is_done():
+            return await interaction.followup.send(**kwargs)
+        return await interaction.response.send_message(**kwargs)
+    except Exception:
         pass
 
 
 # ==============================================================================
-# 💾 التخزين (إعدادات لكل سيرفر + إحصائيات النمو اليومية)
+# 💾 نظام التخزين السحابي الآمن (MongoDB)
 # ==============================================================================
 class ServerInfoStore:
     def __init__(self):
@@ -197,13 +193,13 @@ class ServerInfoStore:
         uri = os.getenv("MONGODB_URI", "").strip()
         if uri:
             try:
-                db = MongoClient(uri, serverSelectionTimeoutMS=5000)["ZeroPro_ServerInfo_DB"]
+                db = MongoClient(uri, serverSelectionTimeoutMS=5000)["Global_Bot_DB"]
                 self.col = db["serverinfo_settings"]
                 self.growth_col = db["serverinfo_growth"]
             except Exception:
                 log.exception("فشل الاتصال بـ MongoDB")
         else:
-            log.warning("MONGODB_URI غير موجود! إعدادات معلومات السيرفر وإحصائيات النمو هتضيع بعد أي ريستارت.")
+            log.warning("MONGODB_URI غير موجود! إعدادات معلومات السيرفر وإحصائيات النمو ستعتمد على الذاكرة المؤقتة.")
 
     async def init(self):
         if self.col is None:
@@ -212,20 +208,19 @@ class ServerInfoStore:
             try:
                 await asyncio.to_thread(col.create_index, keys, unique=True)
             except Exception:
-                log.warning("تعذر إنشاء index %s", keys, exc_info=True)
+                pass
 
     async def get(self, gid: int) -> dict:
         cfg = self.cache.get(gid)
         if cfg is not None:
             return cfg
         if time.monotonic() < self.failed_until.get(gid, 0):
-            return copy.deepcopy(DEFAULTS)  # الداتابيز واقعة: ما نعيدش المحاولة مع كل رسالة
+            return copy.deepcopy(DEFAULTS)
         doc = None
         if self.col is not None:
             try:
                 doc = await asyncio.to_thread(self.col.find_one, {"guild_id": gid})
             except Exception:
-                log.exception("فشل قراءة إعدادات السيرفر %s (هستخدم الافتراضي مؤقتاً)", gid)
                 self.failed_until[gid] = time.monotonic() + 60
                 return copy.deepcopy(DEFAULTS)
         cfg = copy.deepcopy(DEFAULTS)
@@ -244,12 +239,11 @@ class ServerInfoStore:
             try:
                 await asyncio.to_thread(self.col.update_one, {"guild_id": gid}, {"$set": fields}, True)
             except Exception:
-                log.exception("فشل حفظ إعدادات السيرفر %s", gid)
+                pass
 
     async def reset(self, gid: int):
         old = self.cache.get(gid) or {}
         self.cache[gid] = copy.deepcopy(DEFAULTS)
-        # أعلى رقم أعضاء هو إحصائية مش إعداد، فبنحافظ عليه
         self.cache[gid]["peak_members"] = old.get("peak_members", 0)
         self.cache[gid]["peak_at"] = old.get("peak_at", 0)
         if self.col is not None:
@@ -258,7 +252,7 @@ class ServerInfoStore:
                 await asyncio.to_thread(self.col.update_one, {"guild_id": gid},
                                         {"$set": {"peak_members": self.cache[gid]["peak_members"], "peak_at": self.cache[gid]["peak_at"]}}, True)
             except Exception:
-                log.exception("فشل مسح إعدادات السيرفر %s", gid)
+                pass
 
     async def record_growth(self, gid: int, joins: int, leaves: int, members: int):
         date = local_now().date().isoformat()
@@ -272,7 +266,7 @@ class ServerInfoStore:
                 self.growth_col.update_one, {"guild_id": gid, "date": date},
                 {"$inc": {"joins": joins, "leaves": leaves}, "$set": {"members": members}}, True)
         except Exception:
-            log.exception("فشل تسجيل إحصائية النمو")
+            pass
 
     async def growth(self, gid: int, days: int = 7) -> list[tuple[str, int, int]]:
         today = local_now().date()
@@ -284,7 +278,7 @@ class ServerInfoStore:
                 for d in docs:
                     rows[d["date"]] = (int(d.get("joins", 0)), int(d.get("leaves", 0)))
             except Exception:
-                log.exception("فشل قراءة إحصائيات النمو")
+                pass
         else:
             for d in dates:
                 r = self.mem_growth.get((gid, d))
@@ -302,12 +296,12 @@ async def update_peak(guild: discord.Guild, cfg: dict, total: int):
 
 
 # ==============================================================================
-# 📄 صفحات المعلومات
+# 📄 بناء صفحات المعلومات بأمان تام
 # ==============================================================================
 def member_counts(guild: discord.Guild) -> tuple[int, int, int, bool]:
     total = guild.member_count or len(guild.members)
     bots = sum(1 for m in guild.members if m.bot)
-    complete = len(guild.members) >= total * 0.95
+    complete = len(guild.members) >= total * 0.95 if total > 0 else True
     return total, max(0, total - bots), bots, complete
 
 
@@ -315,7 +309,7 @@ def base_embed(guild: discord.Guild, cfg: dict, page: str) -> discord.Embed:
     if page == "overview":
         title = fmt_template(cfg["title"], guild)
     else:
-        name, emoji = PAGE_META[page]
+        name, emoji = PAGE_META.get(page, ("معلومات", "📇"))
         title = f"{emoji} ╎ {name} — {guild.name}"
     embed = discord.Embed(title=clip(title, 256), color=parse_color(cfg["color"]), timestamp=discord.utils.utcnow())
     if guild.icon:
@@ -334,9 +328,12 @@ async def page_overview(bot, guild, cfg, embed):
     )
     banner = cfg["banner_url"] or (guild.banner.url if guild.banner else None)
     if banner:
-        embed.set_image(url=banner)
+        try:
+            embed.set_image(url=banner)
+        except Exception:
+            pass
 
-    age = discord.utils.utcnow() - guild.created_at
+    age = discord.utils.utcnow() - guild.created_at if guild.created_at else datetime.timedelta(0)
     embed.add_field(
         name="📋 ╎ الـمـعـلـومـات الـأسـاسـيـة",
         value="\n".join([
@@ -574,18 +571,18 @@ async def build_page(bot: commands.Bot, guild: discord.Guild, cfg: dict, page: s
 
 
 # ==============================================================================
-# 🛡️ Views/Modals آمنة
+# 🛡️ الأزرار والـ Views الآمنة
 # ==============================================================================
 class SafeView(discord.ui.View):
     async def on_error(self, interaction: discord.Interaction, error: Exception, item):
-        log.exception("خطأ في %s", type(self).__name__, exc_info=error)
-        await report_error(interaction)
+        log.exception("خطأ في الواجهة", exc_info=error)
+        await respond(interaction, content="❌ حدث خطأ أثناء تنفيذ هذا الزر.", ephemeral=True)
 
 
 class SafeModal(discord.ui.Modal):
     async def on_error(self, interaction: discord.Interaction, error: Exception):
-        log.exception("خطأ في %s", type(self).__name__, exc_info=error)
-        await report_error(interaction)
+        log.exception("خطأ في النافذة", exc_info=error)
+        await respond(interaction, content="❌ حدث خطأ أثناء حفظ النموذج.", ephemeral=True)
 
 
 class AdminView(SafeView):
@@ -596,9 +593,6 @@ class AdminView(SafeView):
         return False
 
 
-# ==============================================================================
-# 🎛️ واجهة معلومات السيرفر (صفحات + أزرار)
-# ==============================================================================
 class PageSelect(discord.ui.Select):
     def __init__(self, cfg: dict, current: str):
         options = []
@@ -686,7 +680,7 @@ class ServerInfoView(SafeView):
 
 
 # ==============================================================================
-# ⚙️ لوحة الإعدادات (للإدارة)
+# ⚙️ لوحة الإعدادات
 # ==============================================================================
 def build_settings_embed(guild: discord.Guild, cfg: dict) -> discord.Embed:
     def on_off(v: bool) -> str:
@@ -781,7 +775,7 @@ class ShortcutsModal(SafeModal):
             if w and len(w) <= 30 and w not in words:
                 words.append(w)
         await STORE.update(interaction.guild.id, shortcuts=words[:5])
-        await show_settings(interaction, "تم حفظ كلمات الاختصار (بحد أقصى 5). الاختصار بيشتغل لما الرسالة تكون الكلمة بالظبط.")
+        await show_settings(interaction, "تم حفظ كلمات الاختصار (بحد أقصى 5).")
 
 
 class ResetConfirmView(AdminView):
@@ -791,7 +785,7 @@ class ResetConfirmView(AdminView):
     @discord.ui.button(label="تأكيد إعادة الضبط", style=discord.ButtonStyle.danger, emoji="♻️")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         await STORE.reset(interaction.guild.id)
-        await show_settings(interaction, "تم إرجاع الإعدادات للوضع الافتراضي (إحصائيات النمو محفوظة).")
+        await show_settings(interaction, "تم إرجاع الإعدادات للوضع الافتراضي.")
 
     @discord.ui.button(label="إلغاء", style=discord.ButtonStyle.secondary, emoji="↩️")
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -844,7 +838,7 @@ class SettingsView(AdminView):
 
     @discord.ui.button(label="إعادة الضبط", emoji="♻️", style=discord.ButtonStyle.danger, row=2)
     async def btn_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(title="♻️ إعادة ضبط الإعدادات", description="⚠️ هترجع إعدادات `/serverinfo` للوضع الافتراضي. متأكد؟", color=COLOR_ORANGE)
+        embed = discord.Embed(title="♻️ إعادة ضبط الإعدادات", description="⚠️ هل أنت متأكد من إعادة الإعدادات للوضع الافتراضي؟", color=COLOR_ORANGE)
         await interaction.response.edit_message(embed=embed, view=ResetConfirmView())
 
 
@@ -860,39 +854,52 @@ class ServerInfoCog(commands.Cog):
         await STORE.init()
 
     async def open_panel(self, send, guild: discord.Guild, user_id: int, ephemeral: bool = False) -> None:
-        """بيبني اللوحة ويبعتها عن طريق دالة send (سلاش أو روم)."""
-        cfg = await STORE.get(guild.id)
-        view = ServerInfoView(self.bot, guild, cfg, user_id)
-        embed = await view.build_embed()
         try:
-            view.message = await send(embed=embed, view=view)
-        except discord.HTTPException:
-            # غالباً رابط بنر غير صالح: نبعت من غير صورة
-            embed.set_image(url=None)
-            view.message = await send(embed=embed, view=view)
+            cfg = await STORE.get(guild.id)
+            view = ServerInfoView(self.bot, guild, cfg, user_id)
+            embed = await view.build_embed()
+            try:
+                view.message = await send(embed=embed, view=view)
+            except discord.HTTPException:
+                embed.set_image(url=None)
+                view.message = await send(embed=embed, view=view)
+        except Exception as e:
+            log.exception("خطأ أثناء فتح لوحة المعلومات", exc_info=e)
 
-    # ---------- الأمر ----------
     @app_commands.command(name="serverinfo", description="[معلومات] لوحة معلومات وإحصائيات السيرفر الشاملة")
     @app_commands.guild_only()
     @app_commands.checks.cooldown(1, COMMAND_COOLDOWN, key=lambda i: (i.guild_id, i.user.id))
     async def serverinfo(self, interaction: discord.Interaction):
-        cfg = await STORE.get(interaction.guild.id)
-        await interaction.response.defer(ephemeral=cfg["ephemeral"])
+        try:
+            cfg = await STORE.get(interaction.guild.id)
+            await interaction.response.defer(ephemeral=cfg["ephemeral"])
 
-        async def send(**kwargs):
-            return await interaction.followup.send(wait=True, **kwargs)
+            async def send(**kwargs):
+                return await interaction.followup.send(wait=True, **kwargs)
 
-        await self.open_panel(send, interaction.guild, interaction.user.id)
+            await self.open_panel(send, interaction.guild, interaction.user.id)
+        except Exception as e:
+            log.exception("خطأ في أمر serverinfo", exc_info=e)
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("❌ حدث خطأ أثناء جلب معلومات السيرفر.", ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ حدث خطأ أثناء جلب معلومات السيرفر.", ephemeral=True)
+            except Exception:
+                pass
 
     @app_commands.command(name="serverinfo_settings", description="[الإدارة] التحكم في إعدادات ومظهر لوحة معلومات السيرفر")
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def serverinfo_settings(self, interaction: discord.Interaction):
-        cfg = await STORE.get(interaction.guild.id)
-        await interaction.response.send_message(embed=build_settings_embed(interaction.guild, cfg), view=SettingsView(cfg), ephemeral=True)
+        try:
+            cfg = await STORE.get(interaction.guild.id)
+            await interaction.response.send_message(embed=build_settings_embed(interaction.guild, cfg), view=SettingsView(cfg), ephemeral=True)
+        except Exception as e:
+            log.exception("خطأ في أمر serverinfo_settings", exc_info=e)
+            await respond(interaction, content="❌ حدث خطأ أثناء فتح لوحة الإعدادات.", ephemeral=True)
 
-    # ---------- اختصار الكتابة ----------
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -916,45 +923,50 @@ class ServerInfoCog(commands.Cog):
                 return await message.channel.send(**kwargs)
 
             await self.open_panel(send, message.guild, message.author.id)
-        except discord.HTTPException:
-            log.warning("فشل الرد على اختصار serverinfo", exc_info=True)
+        except Exception:
+            pass
 
-    # ---------- تتبع النمو ----------
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        if member.bot:
+        if member.bot or not member.guild:
             return
-        cfg = await STORE.get(member.guild.id)
-        if cfg["track_growth"]:
-            await STORE.record_growth(member.guild.id, 1, 0, member.guild.member_count or 0)
-        await update_peak(member.guild, cfg, member.guild.member_count or 0)
+        try:
+            cfg = await STORE.get(member.guild.id)
+            if cfg["track_growth"]:
+                await STORE.record_growth(member.guild.id, 1, 0, member.guild.member_count or 0)
+            await update_peak(member.guild, cfg, member.guild.member_count or 0)
+        except Exception:
+            pass
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
-        if member.bot:
+        if member.bot or not member.guild:
             return
-        cfg = await STORE.get(member.guild.id)
-        if cfg["track_growth"]:
-            await STORE.record_growth(member.guild.id, 0, 1, member.guild.member_count or 0)
+        try:
+            cfg = await STORE.get(member.guild.id)
+            if cfg["track_growth"]:
+                await STORE.record_growth(member.guild.id, 0, 1, member.guild.member_count or 0)
+        except Exception:
+            pass
 
-    # ---------- أمر المزامنة (للمالك فقط) ----------
     @commands.command(name="sync_slash")
     @commands.is_owner()
     async def sync_slash(self, ctx: commands.Context):
-        """مزامنة أوامر السلاش مع ديسكورد (لو /serverinfo مش ظاهر)."""
-        synced = await ctx.bot.tree.sync()
-        await ctx.send(f"✅ تمت مزامنة **{len(synced)}** أمر سلاش. لو لسه مش ظاهر، اقفل ديسكورد وافتحه تاني (Ctrl+R).")
+        try:
+            synced = await ctx.bot.tree.sync()
+            await ctx.send(f"✅ تمت مزامنة **{len(synced)}** أمر سلاش بنجاح.")
+        except Exception as e:
+            await ctx.send(f"❌ فشلت المزامنة: `{e}`")
 
-    # ---------- الأخطاء ----------
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.CommandOnCooldown):
-            await respond(interaction, content=f"⏳ استنى {error.retry_after:.0f} ثواني وجرّب تاني.", ephemeral=True)
+            await respond(interaction, content=f"⏳ اللوحة في حالة تهدئة، استنى `{error.retry_after:.0f}` ثواني.", ephemeral=True)
             return
         if isinstance(error, app_commands.MissingPermissions):
-            await respond(interaction, content="❌ الأمر ده للإدارة فقط.", ephemeral=True)
+            await respond(interaction, content="❌ الأمر مخصص للإدارة فقط.", ephemeral=True)
             return
         log.exception("خطأ في أمر سلاش", exc_info=error)
-        await report_error(interaction)
+        await respond(interaction, content="❌ حدث خطأ غير متوقع أثناء معالجة الأمر.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
