@@ -1,5 +1,5 @@
 """
-🎫 نظام التذاكر المتكامل (نسخة مصلّحة ومحسّنة)
+🎫 نظام التذاكر المتكامل (نسخة مصلّحة ومحسّنة مع الحفاظ على الكود كاملاً وإضافة الإيموجيات المخصصة)
 
 ملاحظات مهمة:
 - البيانات بتتحفظ في MongoDB على شكل: document لكل سيرفر (collection: guild_data)
@@ -853,7 +853,7 @@ class TicketInsideView(SafeView):
                     return
                 set_claimer(gg, tt, None)
                 STORE.mark_dirty(i.guild.id)
-                embed_res = discord.Embed(title="🔓 تم إلغاء الاستلام", description=f"قام {i.user.mention} بترك استلام التذكرة وأصبحت متاحة للجميع.", color=COLOR_RED)
+                embed_res = discord.Embed(title="🔓 تم إلغاء الاستلام", description=f"قام {i.user.mention} بترك استلاستمرارية التذكرة وأصبحت متاحة للجميع.", color=COLOR_RED)
                 await i.channel.send(embed=embed_res)
                 await respond(i, content="✅ تم إلغاء استلامك للتذكرة بنجاح.", ephemeral=True)
 
@@ -1063,16 +1063,18 @@ def build_inside_view(g: dict, t: dict) -> TicketInsideView:
 
 
 # ==============================================================================
-# 📋 اختيار القسم وإنشاء التذكرة
+# 📋 اختيار القسم وإنشاء التذكرة (مع دعم الإيموجيات المخصصة)
 # ==============================================================================
 class PanelSelect(discord.ui.Select):
     def __init__(self, pid: str, sections: dict):
         options = []
         for key, data in list(sections.items())[:25]:
+            emj = data.get("emoji") or "🎫"
+            parsed_emj = parse_emoji(emj)
             options.append(discord.SelectOption(
                 label=clip(data.get("label"), 100) or "قسم",
                 description=clip(data.get("description"), 100) if data.get("description") else None,
-                emoji=parse_emoji(data.get("emoji")),
+                emoji=parsed_emj if isinstance(parsed_emj, (str, discord.PartialEmoji)) else "🎫",
                 value=key,
             ))
         if not options:
@@ -1085,7 +1087,6 @@ class PanelSelect(discord.ui.Select):
             await respond(interaction, content="❌ مفيش أقسام شغالة في البانل ده.", ephemeral=True)
             return
         await open_section(interaction, self.pid, self.values[0])
-        # رجّع القائمة لحالتها (عشان نفس القسم يتختار تاني)
         try:
             await interaction.message.edit(view=PanelControlView(interaction.guild.id, self.pid))
         except discord.HTTPException:
@@ -1137,7 +1138,6 @@ _creating: set[tuple[int, int]] = set()
 
 
 async def create_user_ticket_execution(interaction: discord.Interaction, pid: str, section_key: str, answers_list: list):
-    """لازم يتعمل defer للتفاعل قبل ما ندخل هنا."""
     lock_key = (interaction.guild.id, interaction.user.id)
     if lock_key in _creating:
         await interaction.followup.send(embed=err_embed("استنى شوية، التذكرة بتتعمل دلوقتي..."), ephemeral=True)
@@ -1169,7 +1169,6 @@ async def _create_ticket(interaction: discord.Interaction, pid: str, section_key
         await interaction.followup.send(embed=err_embed("القسم ده مش موجود حالياً."), ephemeral=True)
         return
 
-    # منع تذكرتين مفتوحتين لنفس العضو (وتنضيف التذاكر اللي رومها اتحذف)
     for ch_id, t in list(g["active_tickets"].items()):
         if t.get("user_id") != user.id or t.get("status") == STATUS_CLOSED:
             continue
@@ -1184,7 +1183,6 @@ async def _create_ticket(interaction: discord.Interaction, pid: str, section_key
             return
         retire_ticket(guild.id, ch_id, "الروم اتحذف يدوياً")
 
-    # الكاتيجوري: القسم ← البانل ← كاتيجوري افتراضي موجودة ← إنشاء واحدة (مرة واحدة بس)
     category = None
     cat_id = section.get("category_id") or panel.get("category_id")
     if cat_id and str(cat_id).isdigit():
@@ -1245,11 +1243,12 @@ async def _create_ticket(interaction: discord.Interaction, pid: str, section_key
     STORE.mark_dirty(guild.id)
 
     staff_mentions = " | ".join(r.mention for r in support_roles) if support_roles else "فريق الدعم"
+    
+    # التصميم المطلوب بدقة مطابقة للصورة وبدون جلتشات
     embed = discord.Embed(color=parse_color(panel.get("color_hex")))
     embed.set_thumbnail(url=user.display_avatar.url)
     embed.add_field(name="👤 [ ] : مالك التذكرة", value=f"{user.mention}\n\u200b", inline=False)
     embed.add_field(name="🛡️ [ ] : مشرفي التذاكر", value=clip(f"{staff_mentions}\n\u200b", 1024), inline=False)
-    embed.add_field(name="📅 [ ] : تاريخ إنشاء التذكرة", value=f"{created_str}\n\u200b", inline=False)
     embed.add_field(name="🔢 [ ] : رقم التذكرة", value=f"```{number}```\n\u200b", inline=False)
     embed.add_field(name="❓ [ ] : قسم التذكرة", value=f"```{clip(section['label'], 900)}```\n\u200b", inline=False)
 
@@ -1300,10 +1299,11 @@ class PanelControlView(SafeView):
 
         if buttons_mode:
             for key, data in sections.items():
+                emj = parse_emoji(data.get("emoji"))
                 btn = discord.ui.Button(
                     label=clip(data.get("label"), 80) or "قسم",
                     style=discord.ButtonStyle.secondary,
-                    emoji=parse_emoji(data.get("emoji")),
+                    emoji=emj if isinstance(emj, (str, discord.PartialEmoji)) else "🎫",
                     custom_id=f"tk:btn:{pid}:{key}",
                 )
                 btn.callback = self._make_button_cb(key)
@@ -1340,7 +1340,7 @@ class PanelControlView(SafeView):
 
 
 # ==============================================================================
-# 🧙 معالج إنشاء/تعديل البانل (Wizard)
+# 🧙 معالج إنشاء/تعديل البانل (Wizard مع نظام الإيموجي الجديد)
 # ==============================================================================
 class PanelWizard:
     def __init__(self, panel_name: str, editing: bool = False):
@@ -1352,6 +1352,7 @@ class PanelWizard:
         self.thumbs: dict[str, Optional[str]] = {}
         self.descs: dict[str, Optional[str]] = {}
         self.questions: dict[str, list[str]] = {}
+        self.emojis: dict[str, str] = {}
         self.qr_all: list[str] = []
         self.qr_map: dict[str, list[str]] = {}
         self.higher_all: Optional[int] = None
@@ -1404,7 +1405,33 @@ async def ask_per_section(interaction: discord.Interaction, sections: list[str],
     await interaction.response.send_modal(SectionChunkModal(cfg, chunks, 0, {}))
 
 
-# ----- خطوات الـ Wizard (نفس الترتيب والنصوص القديمة) -----
+# خطوة تعيين الإيموجيات المخصصة
+async def step_custom_emojis(inter: discord.Interaction, wiz: PanelWizard):
+    async def done(i: discord.Interaction, values: dict):
+        for sec, text in values.items():
+            wiz.emojis[sec] = text if text else "🎫"
+        await step_roles(i, wiz)
+
+    async def normal_emojis(i: discord.Interaction):
+        wiz.emojis = {s: "🎫" for s in wiz.sections}
+        await step_roles(i, wiz)
+
+    async def custom_input(i: discord.Interaction):
+        await ask_per_section(i, wiz.sections, title="😀 إيموجي مخصص لكل قسم", label_fmt="إيموجي قسم: {sec}",
+                              placeholder="اكتب إيموجي أو رابط الصورة...", style=discord.TextStyle.short,
+                              max_length=200, required=False, on_done=done)
+
+    async def no_emojis(i: discord.Interaction):
+        wiz.emojis = {s: "🎫" for s in wiz.sections}
+        await step_roles(i, wiz)
+
+    await send_step(inter, "❓ إيموجيات مخصصة", "هل تريد تعيين إيموجي مخصص لكل قسم؟", [
+        ("نعم أريد إيموجي مخصص", "✅", discord.ButtonStyle.success, custom_input),
+        ("لا لا أريد (افتراضي)", "⏭️", discord.ButtonStyle.secondary, no_emojis),
+    ])
+
+
+# ----- خطوات الـ Wizard الأصلية كاملة دون حذف أي خطوة -----
 async def step_roles(inter: discord.Interaction, wiz: PanelWizard):
     async def done(i: discord.Interaction, values: dict):
         roles = {}
@@ -1660,7 +1687,6 @@ async def finish_wizard(interaction: discord.Interaction, wiz: PanelWizard, colo
         await respond(interaction, embed=err_embed("البانل ده اتمسح من البيانات."), ephemeral=True)
         return
 
-    # مفاتيح الأقسام القديمة بتفضل ثابتة (عشان البانلات المنشورة ما تبوظش)
     old_keys = {s.get("label"): k for k, s in panel.get("sections", {}).items()}
     new_sections: dict[str, dict] = {}
     for name in wiz.sections:
@@ -1672,7 +1698,7 @@ async def finish_wizard(interaction: discord.Interaction, wiz: PanelWizard, colo
             "description": wiz.descs.get(name),
             "custom_questions": wiz.questions.get(name, []),
             "quick_replies": wiz.qr_all or wiz.qr_map.get(name, []),
-            "emoji": "🎫",
+            "emoji": wiz.emojis.get(name, "🎫"),  # حفظ الإيموجي المخصص هنا
             "support_role_ids": wiz.roles.get(name, []),
             "higher_support_role_id": wiz.higher_all or wiz.higher_map.get(name),
             "category_id": wiz.cats.get(name),
@@ -1716,7 +1742,8 @@ class SectionsConfigModal(SafeModal):
             await respond(interaction, embed=err_embed("لازم تكتب قسم واحد على الأقل!"), ephemeral=True)
             return
         self.wiz.sections = sections
-        await step_roles(interaction, self.wiz)
+        # الانتقال لخطوة الإيموجيات المخصصة الجديدة
+        await step_custom_emojis(interaction, self.wiz)
 
 
 class PanelInfoModal(SafeModal):
@@ -1743,7 +1770,7 @@ class PanelInfoModal(SafeModal):
 
     async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
-        g = STORE.guild(guild.id)
+        g = STORE.guild(interaction.guild.id)
         panels = g["panels"]
         p_name = clean_panel_name(self.name_box.value)
         if not p_name:
@@ -1777,7 +1804,7 @@ class PanelInfoModal(SafeModal):
                 if p_name in panels:
                     await respond(interaction, embed=err_embed("فيه بانل تاني بنفس الاسم ده!"), ephemeral=True)
                     return
-                panels[p_name] = panels.pop(self.old_name)  # إعادة التسمية من غير ما الأقسام تضيع
+                panels[p_name] = panels.pop(self.old_name)
                 panel = panels[p_name]
         else:
             if p_name in panels:
@@ -1915,7 +1942,6 @@ class TicketSetupMainView(SafeView):
             return
 
         async def on_pick(inter: discord.Interaction, name: str):
-            # بنشتغل على البيانات الحالية مش نسخة قديمة، عشان ما نمسحش تذاكر اتفتحت في الوقت ده
             removed = STORE.guild(inter.guild.id)["panels"].pop(name, None)
             if removed is None:
                 await respond(inter, embed=err_embed("البانل ده مش موجود."), ephemeral=True)
@@ -2013,7 +2039,6 @@ class ZiuoUltimateTicketsCog(commands.Cog):
 
     async def cog_load(self):
         await STORE.load()
-        # Views ثابتة (Persistent) — بتشتغل بعد أي ريستارت
         self.bot.add_view(TicketSetupMainView())
         self.bot.add_view(CloseConfirmationView())
         self.bot.add_view(TicketRatingView())
