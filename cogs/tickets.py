@@ -1,11 +1,11 @@
 """
-🎫 نظام التذاكر المتكامل (نسخة مصلّحة ومحسّنة مع الحفاظ على الكود كاملاً وإضافة الإيموجيات المخصصة)
+🎫 نظام التذاكر المتكامل (النسخة الاحترافية)
 
 ملاحظات مهمة:
 - البيانات بتتحفظ في MongoDB على شكل: document لكل سيرفر (collection: guild_data)
   + collection للتذاكر المغلقة (closed_tickets). والبيانات القديمة (tickets_data) بتتنقل أوتوماتيك أول تشغيل.
 - أزرار داخل التذاكر (استلام/إغلاق/..) محافظة على نفس الـ custom_id القديم، فالتذاكر المفتوحة هتكمل شغل.
-- البانلات المنشورة قبل التحديث لازم تتنشر تاني بأمر /ticket (الـ custom_id اتغير عشان يبقى ثابت بعد الريستارت).
+- البانلات المنشورة بالنسخة القديمة جداً لازم تتنشر تاني بأمر /ticket (الـ custom_id اتغير عشان يبقى ثابت بعد الريستارت).
 """
 import asyncio
 import copy
@@ -17,6 +17,7 @@ import time
 import uuid
 from typing import Any, Awaitable, Callable, Optional
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -40,13 +41,18 @@ COLOR_ORANGE = 0xFFA500
 STATUS_OPEN = "مفتوحة"
 STATUS_CLOSED = "مغلقة"
 
+TICKET_EMOJI = "🎫"                # إيموجي التذكرة المفتوحة (في اسم الروم)
+CLOSED_EMOJI = "🔒"                # إيموجي التذكرة المقفولة
+
 RATING_TIMEOUT_SECONDS = 30 * 60   # لو العضو ما قيّمش، التذكرة بتتحذف بعد المدة دي
 PING_COOLDOWN = 60                 # ثواني بين كل تنبيه/تصعيد
 REOPEN_DELAY = 5                   # ثواني قبل ما يتفتح زرار إعادة الفتح
 MAX_SECTIONS = 25
 WIZARD_TIMEOUT = 300
+EMOJI_MAX_BYTES = 256 * 1024       # أقصى حجم لصورة الإيموجي في ديسكورد
 DEFAULT_CATEGORY_NAME = "🎫・التذاكر"
 DEFAULT_SECTIONS_TEXT = "دعم فني\nاستفسارات\nتقديم إدارة"
+LEGACY_PANEL_TITLE = "🎫 الدعم الفني والمساعدة"   # كان بيتحط أوتوماتيك في النسخ القديمة
 
 ButtonCB = Callable[[discord.Interaction], Awaitable[None]]
 
@@ -80,6 +86,7 @@ def parse_color(value: Any, default: int = COLOR_DARK) -> int:
 
 _URL_RE = re.compile(r"^https?://\S{3,2000}$")
 _ID_RE = re.compile(r"\d{15,20}")
+_CUSTOM_EMOJI_RE = re.compile(r"^<(a?):(\w{2,32}):(\d{15,20})>$")
 
 
 def clean_url(value: Optional[str]) -> Optional[str]:
@@ -96,11 +103,31 @@ def clean_panel_name(name: str) -> str:
     return re.sub(r"[.$]", "", name or "").strip()[:50]
 
 
-def parse_emoji(value: Any):
-    value = value or "🎫"
-    if str(value).isdigit():
+def valid_unicode_emoji(value: str) -> bool:
+    """فحص بسيط: لازم يكون رمز إيموجي (مش كلمة ولا حروف)."""
+    v = (value or "").strip()
+    if not v or len(v) > 16:
+        return False
+    if re.search(r"[A-Za-z\u0600-\u06FF]", v):
+        return False
+    return any(ord(c) > 127 for c in v)
+
+
+def parse_emoji(value: Any) -> Optional[discord.PartialEmoji]:
+    """بيحوّل النص المحفوظ لإيموجي صالح للأزرار والقوائم. فاضي = من غير إيموجي نهائياً."""
+    value = str(value).strip() if value else ""
+    if not value:
+        return None
+    if value.isdigit():
         return discord.PartialEmoji(name="emoji", id=int(value))
-    return str(value)
+    try:
+        return discord.PartialEmoji.from_str(value)
+    except Exception:
+        return None
+
+
+def channel_name_for(number: Any, closed: bool = False) -> str:
+    return f"{CLOSED_EMOJI if closed else TICKET_EMOJI}・{number}"
 
 
 async def respond(interaction: discord.Interaction, **kwargs):
@@ -146,6 +173,131 @@ def cooldown_remaining(action: str, channel_id: int, seconds: float) -> float:
     return 0.0
 
 
+_bg_tasks: set[asyncio.Task] = set()
+_rename_log: dict[int, list[float]] = {}
+
+
+def safe_rename(channel: discord.abc.GuildChannel, new_name: str):
+    """تغيير اسم الروم في الخلفية. ديسكورد بيسمح بتغيير الاسم مرتين كل 10 دقايق بس،
+    فبنتخطى التغيير (شكلي بس) بدل ما نعلّق البوت."""
+    if channel.name == new_name:
+        return
+    now = time.monotonic()
+    recent = [t for t in _rename_log.get(channel.id, []) if now - t < 600]
+    if len(recent) >= 2:
+        log.info("تخطي تغيير اسم الروم %s (حد ديسكورد لتغيير الأسماء)", channel.id)
+        return
+    recent.append(now)
+    _rename_log[channel.id] = recent
+
+    async def _go():
+        try:
+            await asyncio.wait_for(channel.edit(name=new_name, reason="تغيير حالة التذكرة"), timeout=15)
+        except Exception:
+            log.warning("تعذر تغيير اسم الروم %s", channel.id, exc_info=True)
+
+    task = asyncio.get_running_loop().create_task(_go())
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
+def open_overwrite() -> discord.PermissionOverwrite:
+    return discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True)
+
+
+def readonly_overwrite() -> discord.PermissionOverwrite:
+    """قراءة فقط: العضو يفضل شايف الروم والرسائل (ومنها رسالة التقييم) بس مش بيكتب."""
+    return discord.PermissionOverwrite(view_channel=True, read_message_history=True, send_messages=False,
+                                       add_reactions=False, attach_files=False, embed_links=False)
+
+
+async def set_participants_mode(guild: discord.Guild, channel: discord.abc.GuildChannel, t: dict, closed: bool):
+    """صاحب التذكرة والأعضاء المضافين: قراءة فقط عند الإغلاق، وكتابة عادية عند إعادة الفتح."""
+    ids = [t.get("user_id")] + list(t.get("added_members", []))
+    for uid in dict.fromkeys(i for i in ids if i):
+        member = await get_member(guild, uid)
+        if member is None:
+            continue
+        try:
+            await channel.set_permissions(member, overwrite=readonly_overwrite() if closed else open_overwrite(),
+                                          reason="تحديث صلاحيات التذكرة")
+        except discord.HTTPException:
+            log.warning("تعذر تحديث صلاحيات العضو %s في التذكرة", uid, exc_info=True)
+
+
+async def delete_ticket_voice(guild: discord.Guild, t: dict) -> bool:
+    """حذف الروم الصوتي المرتبط بالتذكرة فوراً (بيرجع True لو كان فيه واحد)."""
+    voice_id = t.pop("temp_voice_id", None)
+    if not voice_id:
+        return False
+    v_chan = guild.get_channel(int(voice_id))
+    if v_chan:
+        try:
+            await v_chan.delete(reason="إغلاق/حذف التذكرة")
+        except discord.HTTPException:
+            log.warning("تعذر حذف الروم الصوتي", exc_info=True)
+    return True
+
+
+# ==============================================================================
+# 😀 الإيموجيات المخصصة
+# ==============================================================================
+def _emoji_hint_name(hint: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_]", "", hint or "")
+    if len(slug) < 2:
+        slug = uuid.uuid4().hex[:6]
+    return clip(f"tk_{slug}", 32)
+
+
+async def create_emoji_from_url(guild: discord.Guild, url: str, hint: str) -> tuple[Optional[str], Optional[str]]:
+    perms = guild.me.guild_permissions
+    can = getattr(perms, "manage_expressions", None)
+    if can is None:
+        can = getattr(perms, "manage_emojis", False)
+    if not can:
+        return None, "البوت معندوش صلاحية Manage Expressions عشان يضيف إيموجي من رابط."
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return None, f"مقدرتش أحمّل الصورة (كود {resp.status})."
+                if not resp.headers.get("Content-Type", "").startswith("image/"):
+                    return None, "الرابط ده مش صورة."
+                data = await resp.content.read(EMOJI_MAX_BYTES + 1)
+    except Exception:
+        return None, "حصلت مشكلة وأنا بحمّل الصورة من الرابط."
+    if len(data) > EMOJI_MAX_BYTES:
+        return None, "الصورة أكبر من 256KB، صغّرها وجرّب تاني."
+    try:
+        emoji = await guild.create_custom_emoji(name=_emoji_hint_name(hint), image=data, reason="إيموجي بانل التذاكر")
+    except discord.HTTPException as e:
+        return None, f"ديسكورد رفض إنشاء الإيموجي (غالباً السيرفر وصل لحد الإيموجيات): {clip(e, 80)}"
+    return str(emoji), None
+
+
+async def resolve_emoji(guild: discord.Guild, client: discord.Client, raw: str, kind: str, hint: str) -> tuple[Optional[str], Optional[str]]:
+    """بيرجع (الإيموجي المحفوظ, تحذير). kind = normal (عادي) أو custom (مخصص: سيرفر/أيدي/رابط صورة)."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None, None
+    if kind == "normal":
+        if valid_unicode_emoji(raw):
+            return raw, None
+        return None, f"«{clip(raw, 15)}» مش إيموجي عادي صالح، تم تجاهله."
+    m = _CUSTOM_EMOJI_RE.match(raw)
+    if m or raw.isdigit():
+        emoji_id = int(m.group(3)) if m else int(raw)
+        emoji = client.get_emoji(emoji_id)
+        if emoji:
+            return str(emoji), None
+        return None, "الإيموجي ده مش من سيرفر البوت موجود فيه، تم تجاهله."
+    if clean_url(raw):
+        return await create_emoji_from_url(guild, raw, hint)
+    if valid_unicode_emoji(raw):
+        return raw, None
+    return None, f"«{clip(raw, 15)}» مش إيموجي ولا رابط صورة صالح، تم تجاهله."
+
+
 # ==============================================================================
 # 💾 تخزين البيانات (MongoDB) — في الذاكرة + حفظ في الخلفية بدون تعطيل البوت
 # ==============================================================================
@@ -188,6 +340,10 @@ class TicketStore:
             panel.setdefault("sections", {})
             panel.setdefault("display_type", "menu")
             panel.setdefault("color_hex", "2b2d31")
+            panel.setdefault("ratings_enabled", True)
+            panel.setdefault("published", [])
+            if panel.get("title") == LEGACY_PANEL_TITLE:  # كان بيتحط أوتوماتيك، دلوقتي فاضي لحد ما العضو يكتب عنوانه
+                panel["title"] = ""
             for fld in ("image_url", "thumbnail_url"):
                 if panel.get(fld) in ("None", ""):
                     panel[fld] = None
@@ -195,6 +351,9 @@ class TicketStore:
                 for fld in ("image_url", "thumbnail_url"):
                     if sec.get(fld) in ("None", ""):
                         sec[fld] = None
+                # الإيموجي الافتراضي القديم (🎫) اتحط أوتوماتيك، دلوقتي مفيش إيموجي إلا لو العضو اختار
+                if sec.get("emoji") == TICKET_EMOJI and not sec.get("emoji_set"):
+                    sec["emoji"] = None
         return g
 
     def _load_sync(self) -> dict[str, dict]:
@@ -383,17 +542,18 @@ def retire_ticket(guild_id: Any, channel_id: Any, reason: str):
 
 
 def build_panel_embed(name: str, p: dict) -> discord.Embed:
+    """إيمبد البانل: مفيش أي حاجة بتتحط أوتوماتيك (لا عنوان ولا تذييل ولا وقت). كل حاجة من اختيارك."""
     embed = discord.Embed(
-        title=p.get("title"),
-        description=p.get("desc"),
+        title=clip(p.get("title"), 256) or None,
+        description=p.get("desc") or None,
         color=parse_color(p.get("color_hex")),
-        timestamp=discord.utils.utcnow(),
     )
     if p.get("image_url"):
         embed.set_image(url=p["image_url"])
     if p.get("thumbnail_url"):
         embed.set_thumbnail(url=p["thumbnail_url"])
-    embed.set_footer(text=clip(p.get("custom_footer_info") or name, 2048))
+    if p.get("custom_footer_info"):
+        embed.set_footer(text=clip(p["custom_footer_info"], 2048))
     return embed
 
 
@@ -402,9 +562,34 @@ def strip_embed_media(embed: discord.Embed) -> discord.Embed:
     fb = embed.copy()
     fb.set_image(url=None)
     fb.set_thumbnail(url=None)
-    footer_text = embed.footer.text if embed.footer and embed.footer.text else "نظام إدارة التذاكر"
-    fb.set_footer(text=footer_text)
     return fb
+
+
+async def refresh_published_panel(guild: discord.Guild, name: str, panel: dict) -> tuple[int, int]:
+    """تحديث كل رسائل البانل المنشورة (بيرجع: عدد اللي اتحدث، عدد اللي فشل)."""
+    ok = fail = 0
+    keep = []
+    for ref in list(panel.get("published", [])):
+        chan = guild.get_channel_or_thread(int(ref["channel_id"]))
+        if chan is None:
+            continue
+        try:
+            msg = await chan.fetch_message(int(ref["message_id"]))
+            embed = build_panel_embed(name, panel)
+            try:
+                await msg.edit(embed=embed, view=PanelControlView(guild.id, panel["pid"]))
+            except discord.HTTPException:
+                await msg.edit(embed=strip_embed_media(embed), view=PanelControlView(guild.id, panel["pid"]))
+            ok += 1
+            keep.append(ref)
+        except discord.NotFound:
+            continue  # الرسالة اتمسحت: نشيلها من القايمة
+        except discord.HTTPException:
+            fail += 1
+            keep.append(ref)
+    panel["published"] = keep
+    STORE.mark_dirty(guild.id)
+    return ok, fail
 
 
 # ==============================================================================
@@ -433,13 +618,17 @@ class ChoiceView(SafeView):
             self.add_item(btn)
 
 
+async def send_view(interaction: discord.Interaction, title: str, description: str, view: discord.ui.View):
+    await respond(interaction, embed=discord.Embed(title=title, description=clip(description, 4000), color=COLOR_DARK),
+                  view=view, ephemeral=True)
+
+
 async def send_step(interaction: discord.Interaction, title: str, description: str, options):
-    await respond(interaction, embed=discord.Embed(title=title, description=description, color=COLOR_DARK),
-                  view=ChoiceView(options), ephemeral=True)
+    await send_view(interaction, title, description, ChoiceView(options))
 
 
 # ==============================================================================
-# ⭐ نظام التقييم والحذف السريع
+# ⭐ نظام التقييم (اختياري لكل بانل)
 # ==============================================================================
 class TicketRatingView(SafeView):
     def __init__(self):
@@ -508,14 +697,7 @@ class TicketRatingView(SafeView):
 
 
 async def delete_ticket_channels(guild: discord.Guild, channel: discord.abc.GuildChannel, data: dict):
-    voice_id = data.get("temp_voice_id")
-    if voice_id:
-        v_chan = guild.get_channel(int(voice_id))
-        if v_chan:
-            try:
-                await v_chan.delete(reason="حذف تذكرة")
-            except discord.HTTPException:
-                log.warning("تعذر حذف الروم الصوتي", exc_info=True)
+    await delete_ticket_voice(guild, data)  # احتياطي (الصوتي بيتحذف أصلاً لحظة الحذف)
     try:
         await channel.delete(reason="حذف تذكرة")
     except discord.HTTPException:
@@ -546,18 +728,25 @@ async def build_transcript(channel: discord.TextChannel, number: str) -> discord
 class DeleteReasonModal(SafeModal, title="🗑️ سبب حذف التذكرة"):
     reason_box = discord.ui.TextInput(
         label="سبب الإغلاق / الحذف",
-        placeholder="اكتب سبب حذف التذكرة هنا...",
+        placeholder="اكتب سبب حذف التذكرة (هيتسجل في روم اللوج)...",
         style=discord.TextStyle.paragraph,
         max_length=300,
         required=True,
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()  # قراءة الرسائل بتاخد وقت
         reason_text = self.reason_box.value.strip()
         channel = interaction.channel
         guild = interaction.guild
         g = STORE.guild(guild.id)
+
+        t_peek = g["active_tickets"].get(str(channel.id))
+        if t_peek is None:
+            await respond(interaction, embed=err_embed("التذكرة دي مش مسجلة (يمكن اتحذفت بالفعل)."), ephemeral=True)
+            return
+        ratings_on = bool(t_peek.get("ratings_enabled", True))
+        # لو التقييمات متوقفة الرد خاص بالإداري (الروم هيتحذف على طول)
+        await interaction.response.defer(ephemeral=not ratings_on)
 
         ticket = g["active_tickets"].pop(str(channel.id), None)
         if ticket is None:
@@ -569,16 +758,11 @@ class DeleteReasonModal(SafeModal, title="🗑️ سبب حذف التذكرة")
         ticket["closed_by"] = interaction.user.id
         ticket["close_reason"] = reason_text
         ticket["closed_at"] = discord.utils.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-
         creator_id = ticket.get("user_id") or interaction.user.id
-        g["pending_ratings"][str(channel.id)] = {
-            "user_id": creator_id,
-            "claimed_by": ticket.get("claimed_by"),
-            "section": ticket.get("section"),
-            "temp_voice_id": ticket.get("temp_voice_id"),
-            "created": now_ts(),
-            "rated": False,
-        }
+        creator = await get_member(guild, creator_id)
+
+        # الروم الصوتي بيتحذف فوراً مع الحذف
+        await delete_ticket_voice(guild, ticket)
         STORE.mark_dirty(guild.id)
         STORE.archive(dict(ticket, guild_id=str(guild.id), channel_id=str(channel.id)))
 
@@ -605,13 +789,41 @@ class DeleteReasonModal(SafeModal, title="🗑️ سبب حذف التذكرة")
             description=f"**السبب:** {reason_text}\n**بواسطة:** {interaction.user.mention}",
             color=COLOR_RED,
         )
-        embed_rate = discord.Embed(
-            title="⭐ تقييم الخدمة",
-            description=f"يا <@{creator_id}> يرجى تقييم مستوى الدعم الفني قبل إغلاق التذكرة نهائياً:",
-            color=COLOR_DARK,
-        )
-        await interaction.followup.send(embed=embed_reason_msg)
-        await channel.send(embed=embed_rate, view=TicketRatingView())
+
+        if ratings_on and creator is not None:
+            # العضو يفضل شايف الروم (قراءة فقط) عشان يشوف رسالة التقييم ويضغط عليها
+            await set_participants_mode(guild, channel, ticket, closed=True)
+            g["pending_ratings"][str(channel.id)] = {
+                "user_id": creator_id,
+                "claimed_by": ticket.get("claimed_by"),
+                "section": ticket.get("section"),
+                "created": now_ts(),
+                "rated": False,
+            }
+            STORE.mark_dirty(guild.id)
+            embed_rate = discord.Embed(
+                title="⭐ تقييم الخدمة",
+                description=f"يا <@{creator_id}> يرجى تقييم مستوى الدعم الفني قبل إغلاق التذكرة نهائياً:\n_(اضغط على عدد النجوم المناسب)_",
+                color=COLOR_DARK,
+            )
+            await interaction.followup.send(embed=embed_reason_msg)
+            await channel.send(content=f"<@{creator_id}>", embed=embed_rate, view=TicketRatingView(),
+                               allowed_mentions=discord.AllowedMentions(users=True))
+            return
+
+        # بدون تقييم: حذف مباشر
+        if ratings_on:  # التقييم مفعل بس العضو خرج من السيرفر
+            await interaction.followup.send(embed=embed_reason_msg)
+            await asyncio.sleep(3)
+        else:
+            try:
+                await interaction.followup.send("✅ تم حذف التذكرة.", ephemeral=True)
+            except discord.HTTPException:
+                pass
+        try:
+            await channel.delete(reason=f"حذف تذكرة: {clip(reason_text, 100)}")
+        except discord.HTTPException:
+            log.warning("تعذر حذف روم التذكرة", exc_info=True)
 
 
 # ==============================================================================
@@ -645,16 +857,12 @@ class CloseConfirmationView(SafeView):
         STORE.mark_dirty(interaction.guild.id)
         await interaction.response.defer()
 
-        creator = await get_member(interaction.guild, t.get("user_id"))
-        if creator:
-            try:
-                await interaction.channel.set_permissions(creator, send_messages=True, view_channel=True)
-            except discord.HTTPException:
-                log.warning("تعذر استرجاع صلاحيات صاحب التذكرة", exc_info=True)
+        await set_participants_mode(interaction.guild, interaction.channel, t, closed=False)
+        safe_rename(interaction.channel, channel_name_for(ticket_number(t, interaction.channel), closed=False))
 
         embed = discord.Embed(
             title="🔓 تم إعادة فتح التذكرة",
-            description=f"تم فتح التذكرة بواسطة {interaction.user.mention}.",
+            description=f"تم فتح التذكرة بواسطة {interaction.user.mention}.\n_(لو عاوز روم صوتي اضغط زرار 🔊 غرفة صوتية من جديد)_",
             color=COLOR_GREEN,
             timestamp=discord.utils.utcnow(),
         )
@@ -680,7 +888,7 @@ class CloseConfirmationView(SafeView):
 
 
 # ==============================================================================
-# ⚡ الردود السريعة (للمشرفين وفريق الدعم فقط)
+# ⚡ الردود السريعة (للمشرفين وفريق الدعم فقط والتذكرة مفتوحة)
 # ==============================================================================
 class QuickRepliesSelect(discord.ui.Select):
     def __init__(self, quick_replies: Optional[list] = None):
@@ -704,7 +912,7 @@ class QuickRepliesSelect(discord.ui.Select):
             await respond(interaction, embed=err_embed("التذكرة دي مش مسجلة في النظام."), ephemeral=True)
             return
         if t.get("status") == STATUS_CLOSED:
-            await respond(interaction, content="❌ التذكرة مغلقة، لا يمكن استخدام الردود السريعة حالياً.", ephemeral=True)
+            await respond(interaction, content="❌ التذكرة مغلقة، افتحها الأول عشان تستخدم الردود السريعة.", ephemeral=True)
             return
         if not member_is_staff(interaction.user, t):
             await respond(interaction, content="❌ الإدارة فقط من تستطيع استخدام هذه الردود.", ephemeral=True)
@@ -734,12 +942,13 @@ class QuickRepliesSelect(discord.ui.Select):
 
 
 # ==============================================================================
-# 🔄 نقل التذكرة لمشرف تاني
+# 🔄 نقل التذكرة لمشرف تاني (لمستلم التذكرة فقط)
 # ==============================================================================
 class ClaimSwitchView(SafeView):
-    def __init__(self, channel_id: str):
+    def __init__(self, channel_id: str, claimer_id: int):
         super().__init__(timeout=60)
         self.channel_id = channel_id
+        self.claimer_id = claimer_id
 
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="اختر المشرف الجديد...", min_values=1, max_values=1)
     async def pick(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
@@ -748,17 +957,28 @@ class ClaimSwitchView(SafeView):
         if not t:
             await respond(interaction, embed=err_embed("التذكرة دي مش مسجلة في النظام."), ephemeral=True)
             return
+        if interaction.user.id != self.claimer_id or t.get("claimed_by") != interaction.user.id:
+            await respond(interaction, embed=err_embed("التحويل لمستلم التذكرة الحالي فقط.", "❌ غير مسموح"), ephemeral=True)
+            return
+        if t.get("status") == STATUS_CLOSED:
+            await respond(interaction, content="❌ التذكرة مغلقة، افتحها الأول.", ephemeral=True)
+            return
 
         target = select.values[0]
         member = target if isinstance(target, discord.Member) else await get_member(interaction.guild, target.id)
         if member is None or member.bot:
             await respond(interaction, content="❌ مفيش عضو صالح بالاختيار ده.", ephemeral=True)
             return
+        if member.id == interaction.user.id:
+            await respond(interaction, content="❌ التذكرة مستلمة باسمك بالفعل.", ephemeral=True)
+            return
         if member.id == t.get("user_id"):
             await respond(interaction, content="❌ مينفعش تحول التذكرة لصاحبها.", ephemeral=True)
             return
         if not member_is_staff(member, t):
-            await respond(interaction, content="❌ العضو ده مش من فريق الدعم الخاص بالقسم ده.", ephemeral=True)
+            await respond(interaction, embed=err_embed(
+                f"{member.mention} ليس من طاقم الإشراف.\nلازم يكون معاه رتبة الإدارة أو رتبة الدعم الخاصة بالقسم عشان تحوله ليه.",
+                "❌ مش من طاقم الإشراف"), ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -804,11 +1024,14 @@ class AddMemberModal(SafeModal, title="➕ إضافة عضو للتذكرة"):
             return
 
         try:
-            await interaction.channel.set_permissions(member, view_channel=True, send_messages=True, read_message_history=True)
+            await interaction.channel.set_permissions(member, overwrite=open_overwrite())
         except discord.HTTPException:
             await interaction.followup.send(embed=err_embed("حصلت مشكلة وأنا بغير الصلاحيات."), ephemeral=True)
             return
 
+        added = t.setdefault("added_members", [])
+        if member.id not in added and member.id != t.get("user_id"):
+            added.append(member.id)
         t["last_activity"] = now_ts()
         STORE.mark_dirty(interaction.guild.id)
         await interaction.channel.send(embed=ok_embed("✅ تم الإضافة", f"تم إضافة {member.mention} للتذكرة بنجاح."))
@@ -831,7 +1054,7 @@ class TicketInsideView(SafeView):
             await respond(interaction, embed=err_embed("التذكرة دي غير مسجلة في النظام."), ephemeral=True)
             return
         if t.get("status") == STATUS_CLOSED:
-            await respond(interaction, content="❌ التذكرة مغلقة، لا يمكن استلامها.", ephemeral=True)
+            await respond(interaction, content="❌ التذكرة مغلقة، افتحها الأول عشان تستلمها.", ephemeral=True)
             return
         if interaction.user.id == t.get("user_id"):
             await respond(interaction, embed=err_embed("متقدرش تستلم تذكرتك بنفسك!", "❌ غير مسموح"), ephemeral=True)
@@ -840,10 +1063,32 @@ class TicketInsideView(SafeView):
             await respond(interaction, embed=err_embed("الزر ده خاص بفريق الدعم بس.", "❌ غير مسموح"), ephemeral=True)
             return
 
-        old_claimer_id = t.get("claimed_by")
-        if old_claimer_id == interaction.user.id:
-            embed_ask = discord.Embed(title="💼 حالة التذكرة", description="أنت مستلم التذكرة دي بالفعل. حابب تعمل ايه؟", color=COLOR_ORANGE)
+        guild = interaction.guild
+        claimer_id = t.get("claimed_by")
+
+        # التذكرة مستلمة بواسطة مشرف تاني: مفيش تبديل عشوائي، المستلم نفسه بس هو اللي يحوّل أو يلغي
+        if claimer_id and claimer_id != interaction.user.id:
+            claimer = await get_member(guild, claimer_id)
+            if claimer is not None and member_is_staff(claimer, t):
+                await respond(interaction, embed=err_embed(
+                    f"التذكرة دي مستلمة بواسطة {claimer.mention}.\n"
+                    "الاستلام أو التحويل أو إلغاء الاستلام لمستلم التذكرة بنفسه فقط.", "🔒 التذكرة مستلمة"), ephemeral=True)
+                return
+            # المستلم القديم مشي من السيرفر أو فقد صلاحياته: الاستلام يرجع متاح
+            set_claimer(g, t, None)
+            claimer_id = None
+
+        # المستلم نفسه ضغط الزر: يختار إلغاء الاستلام أو التحويل
+        if claimer_id == interaction.user.id:
+            embed_ask = discord.Embed(
+                title="💼 حالة التذكرة",
+                description=("أنت مستلم التذكرة دي بالفعل. حابب تعمل ايه؟\n\n"
+                             "🔓 **إلغاء الاستلام:** التذكرة ترجع متاحة لأي إداري يستلمها.\n"
+                             "🔄 **تحويل لمشرف:** تختار مشرف تاني من طاقم الإشراف وتنقل ليه التذكرة."),
+                color=COLOR_ORANGE,
+            )
             channel_id = str(interaction.channel.id)
+            owner_id = interaction.user.id
 
             async def do_unclaim(i: discord.Interaction):
                 gg = STORE.guild(i.guild.id)
@@ -853,13 +1098,17 @@ class TicketInsideView(SafeView):
                     return
                 set_claimer(gg, tt, None)
                 STORE.mark_dirty(i.guild.id)
-                embed_res = discord.Embed(title="🔓 تم إلغاء الاستلام", description=f"قام {i.user.mention} بترك استلاستمرارية التذكرة وأصبحت متاحة للجميع.", color=COLOR_RED)
+                embed_res = discord.Embed(title="🔓 تم إلغاء الاستلام", description=f"قام {i.user.mention} بترك استلام التذكرة وأصبحت متاحة للجميع.", color=COLOR_RED)
                 await i.channel.send(embed=embed_res)
                 await respond(i, content="✅ تم إلغاء استلامك للتذكرة بنجاح.", ephemeral=True)
 
             async def do_switch(i: discord.Interaction):
-                embed_switch = discord.Embed(title="🔄 تحويل التذكرة", description="اختر المشرف اللي عاوز تحول التذكرة ليه:", color=COLOR_DARK)
-                await respond(i, embed=embed_switch, view=ClaimSwitchView(channel_id), ephemeral=True)
+                tt = STORE.guild(i.guild.id)["active_tickets"].get(channel_id)
+                if not tt or tt.get("claimed_by") != i.user.id:
+                    await respond(i, content="❌ التذكرة دي مبقتش باسمك.", ephemeral=True)
+                    return
+                embed_switch = discord.Embed(title="🔄 تحويل التذكرة", description="اختر المشرف اللي عاوز تحول التذكرة ليه (لازم يكون من طاقم الإشراف):", color=COLOR_DARK)
+                await respond(i, embed=embed_switch, view=ClaimSwitchView(channel_id, owner_id), ephemeral=True)
 
             view = ChoiceView([
                 ("إلغاء الاستلام", "🔓", discord.ButtonStyle.danger, do_unclaim),
@@ -868,28 +1117,21 @@ class TicketInsideView(SafeView):
             await respond(interaction, embed=embed_ask, view=view, ephemeral=True)
             return
 
+        # استلام جديد
         await interaction.response.defer()
         set_claimer(g, t, interaction.user.id)
-        STORE.mark_dirty(interaction.guild.id)
+        STORE.mark_dirty(guild.id)
         try:
             await interaction.channel.set_permissions(interaction.user, view_channel=True, send_messages=True, read_message_history=True)
         except discord.HTTPException:
             log.warning("تعذر إعطاء صلاحيات للمشرف المستلم", exc_info=True)
 
-        if old_claimer_id:
-            embed = discord.Embed(
-                title="🔄 تم تغيير المشرف",
-                description=f"تم نقل التذكرة من <@{old_claimer_id}> إلى {interaction.user.mention}.",
-                color=COLOR_GREEN,
-                timestamp=discord.utils.utcnow(),
-            )
-        else:
-            embed = discord.Embed(
-                title="💼 تم استلام التذكرة",
-                description=f"المشرف المسؤول: {interaction.user.mention}",
-                color=COLOR_GREEN,
-                timestamp=discord.utils.utcnow(),
-            )
+        embed = discord.Embed(
+            title="💼 تم استلام التذكرة",
+            description=f"المشرف المسؤول: {interaction.user.mention}",
+            color=COLOR_GREEN,
+            timestamp=discord.utils.utcnow(),
+        )
         await interaction.followup.send(embed=embed)
 
     # ---------- إضافة عضو ----------
@@ -900,7 +1142,7 @@ class TicketInsideView(SafeView):
             await respond(interaction, embed=err_embed("التذكرة دي مش مسجلة في النظام."), ephemeral=True)
             return
         if t.get("status") == STATUS_CLOSED:
-            await respond(interaction, content="❌ التذكرة مغلقة، لا يمكن إضافة أعضاء.", ephemeral=True)
+            await respond(interaction, content="❌ التذكرة مغلقة، افتحها الأول عشان تضيف أعضاء.", ephemeral=True)
             return
         if interaction.user.id == t.get("user_id"):
             await respond(interaction, embed=err_embed("صاحب التذكرة ميعرفش يضيف أعضاء للتذكرة.", "❌ غير مسموح"), ephemeral=True)
@@ -918,7 +1160,7 @@ class TicketInsideView(SafeView):
             await respond(interaction, embed=err_embed("التذكرة دي مش مسجلة في النظام."), ephemeral=True)
             return
         if t.get("status") == STATUS_CLOSED:
-            await respond(interaction, content="❌ التذكرة مغلقة، لا يمكن إنشاء غرفة صوتية.", ephemeral=True)
+            await respond(interaction, content="❌ التذكرة مغلقة، افتحها الأول عشان تعمل غرفة صوتية.", ephemeral=True)
             return
         if not member_is_staff(interaction.user, t):
             await respond(interaction, embed=err_embed("الغرفة الصوتية بيفتحها فريق الدعم بس.", "❌ غير مسموح"), ephemeral=True)
@@ -948,7 +1190,7 @@ class TicketInsideView(SafeView):
 
         try:
             voice_chan = await guild.create_voice_channel(
-                name=f"🎫・Voice・{ticket_number(t, interaction.channel)}",
+                name=f"{TICKET_EMOJI}・Voice・{ticket_number(t, interaction.channel)}",
                 category=interaction.channel.category,
                 overwrites=overwrites,
             )
@@ -959,7 +1201,7 @@ class TicketInsideView(SafeView):
         t["temp_voice_id"] = str(voice_chan.id)
         t["last_activity"] = now_ts()
         STORE.mark_dirty(guild.id)
-        embed = discord.Embed(title="🔊 تم إنشاء الفويس", description=f"تم عمل روم صوتي خاص بالتذكرة: {voice_chan.mention}", color=COLOR_GREEN)
+        embed = discord.Embed(title="🔊 تم إنشاء الفويس", description=f"تم عمل روم صوتي خاص بالتذكرة: {voice_chan.mention}\n_(بيتحذف أوتوماتيك لما التذكرة تتقفل)_", color=COLOR_GREEN)
         await interaction.channel.send(embed=embed)
         await interaction.followup.send("✅ تم.", ephemeral=True)
 
@@ -967,12 +1209,17 @@ class TicketInsideView(SafeView):
     @discord.ui.button(label="تنبيه", style=discord.ButtonStyle.secondary, emoji="🔔", custom_id="smart_ping_ticket_btn_v7", row=2)
     async def smart_ping(self, interaction: discord.Interaction, button: discord.ui.Button):
         g, t = get_ticket(interaction)
-        if not t or t.get("status") == STATUS_CLOSED:
-            await respond(interaction, embed=err_embed("التذكرة مغلقة أو غير متاحة للتنبيه."), ephemeral=True)
+        if not t:
+            await respond(interaction, embed=err_embed("التذكرة دي مش مسجلة في النظام."), ephemeral=True)
             return
         is_creator = interaction.user.id == t.get("user_id")
-        if not (is_creator or member_is_staff(interaction.user, t)):
+        is_staff = member_is_staff(interaction.user, t)
+        if not (is_creator or is_staff):
             await respond(interaction, embed=err_embed("التنبيه لصاحب التذكرة وفريق الدعم بس."), ephemeral=True)
+            return
+        # التذكرة مقفولة: الإداري لازم يفتحها الأول، أما صاحب التذكرة فالتنبيه بيشتغل معاه عادي
+        if t.get("status") == STATUS_CLOSED and not is_creator:
+            await respond(interaction, embed=err_embed("التذكرة مقفولة، افتح التذكرة الأول قبل ما تبعت تنبيه.", "🔒 التذكرة مقفولة"), ephemeral=True)
             return
         wait = cooldown_remaining("ping", interaction.channel.id, PING_COOLDOWN)
         if wait:
@@ -997,7 +1244,7 @@ class TicketInsideView(SafeView):
     async def escalate_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         g, t = get_ticket(interaction)
         if not t or t.get("status") == STATUS_CLOSED:
-            await respond(interaction, content="❌ التذكرة مغلقة.", ephemeral=True)
+            await respond(interaction, content="❌ التذكرة مغلقة، افتحها الأول عشان تصعّدها.", ephemeral=True)
             return
         if not (interaction.user.id == t.get("user_id") or member_is_staff(interaction.user, t)):
             await respond(interaction, embed=err_embed("التصعيد لصاحب التذكرة وفريق الدعم بس."), ephemeral=True)
@@ -1036,24 +1283,21 @@ class TicketInsideView(SafeView):
         t["status"] = STATUS_CLOSED
         t["last_activity"] = now_ts()
 
-        creator = await get_member(interaction.guild, t.get("user_id"))
-        if creator:
-            try:
-                await interaction.channel.set_permissions(creator, send_messages=False)
-            except discord.HTTPException:
-                log.warning("تعذر سحب صلاحية الكتابة من صاحب التذكرة", exc_info=True)
-
-        voice_id = t.pop("temp_voice_id", None)
-        if voice_id:
-            v_chan = interaction.guild.get_channel(int(voice_id))
-            if v_chan:
-                try:
-                    await v_chan.delete(reason="إغلاق التذكرة")
-                except discord.HTTPException:
-                    log.warning("تعذر حذف الروم الصوتي", exc_info=True)
+        # صاحب التذكرة (والأعضاء المضافين) يفضلوا شايفين الروم بس قراءة فقط
+        await set_participants_mode(interaction.guild, interaction.channel, t, closed=True)
+        # الروم الصوتي بيتحذف فوراً ومش بيرجع إلا لو اتعمل تاني بزرار 🔊
+        had_voice = await delete_ticket_voice(interaction.guild, t)
         STORE.mark_dirty(interaction.guild.id)
+        # إيموجي التذكرة 🎫 بيتبدل 🔒
+        safe_rename(interaction.channel, channel_name_for(ticket_number(t, interaction.channel), closed=True))
 
-        embed_close = discord.Embed(title="🔒 تم إغلاق التذكرة وحذف الروم الصوتي تلقائياً", description="اختر الخيار المناسب لتنفيذه:", color=COLOR_DARK)
+        embed_close = discord.Embed(
+            title="🔒 تم إغلاق التذكرة" + (" وحذف الروم الصوتي تلقائياً" if had_voice else ""),
+            description=("التذكرة بقت **قراءة فقط** لصاحبها.\n\n"
+                         "🔓 **إعادة فتح:** ترجع التذكرة شغالة (الروم الصوتي مش بيرجع إلا لو اتعمل من جديد).\n"
+                         "🗑️ **حذف التذكرة:** للإدارة فقط."),
+            color=COLOR_DARK,
+        )
         await interaction.channel.send(embed=embed_close, view=CloseConfirmationView())
         await interaction.followup.send("✅ تم إغلاق التذكرة بنجاح.", ephemeral=True)
 
@@ -1063,18 +1307,16 @@ def build_inside_view(g: dict, t: dict) -> TicketInsideView:
 
 
 # ==============================================================================
-# 📋 اختيار القسم وإنشاء التذكرة (مع دعم الإيموجيات المخصصة)
+# 📋 اختيار القسم وإنشاء التذكرة
 # ==============================================================================
 class PanelSelect(discord.ui.Select):
     def __init__(self, pid: str, sections: dict):
         options = []
         for key, data in list(sections.items())[:25]:
-            emj = data.get("emoji") or "🎫"
-            parsed_emj = parse_emoji(emj)
             options.append(discord.SelectOption(
                 label=clip(data.get("label"), 100) or "قسم",
                 description=clip(data.get("description"), 100) if data.get("description") else None,
-                emoji=parsed_emj if isinstance(parsed_emj, (str, discord.PartialEmoji)) else "🎫",
+                emoji=parse_emoji(data.get("emoji")),  # فاضي = من غير إيموجي
                 value=key,
             ))
         if not options:
@@ -1138,6 +1380,7 @@ _creating: set[tuple[int, int]] = set()
 
 
 async def create_user_ticket_execution(interaction: discord.Interaction, pid: str, section_key: str, answers_list: list):
+    """لازم يتعمل defer للتفاعل قبل ما ندخل هنا."""
     lock_key = (interaction.guild.id, interaction.user.id)
     if lock_key in _creating:
         await interaction.followup.send(embed=err_embed("استنى شوية، التذكرة بتتعمل دلوقتي..."), ephemeral=True)
@@ -1169,6 +1412,7 @@ async def _create_ticket(interaction: discord.Interaction, pid: str, section_key
         await interaction.followup.send(embed=err_embed("القسم ده مش موجود حالياً."), ephemeral=True)
         return
 
+    # منع تذكرتين مفتوحتين لنفس العضو (وتنضيف التذاكر اللي رومها اتحذف)
     for ch_id, t in list(g["active_tickets"].items()):
         if t.get("user_id") != user.id or t.get("status") == STATUS_CLOSED:
             continue
@@ -1183,6 +1427,7 @@ async def _create_ticket(interaction: discord.Interaction, pid: str, section_key
             return
         retire_ticket(guild.id, ch_id, "الروم اتحذف يدوياً")
 
+    # الكاتيجوري: القسم ← البانل ← كاتيجوري افتراضية موجودة ← إنشاء واحدة (مرة واحدة بس)
     category = None
     cat_id = section.get("category_id") or panel.get("category_id")
     if cat_id and str(cat_id).isdigit():
@@ -1199,24 +1444,24 @@ async def _create_ticket(interaction: discord.Interaction, pid: str, section_key
 
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True),
+        user: open_overwrite(),
         guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, manage_messages=True),
     }
     support_role_ids = [int(r) for r in section.get("support_role_ids", [])]
     support_roles = [r for r in (guild.get_role(r_id) for r_id in support_role_ids) if r]
     for role in support_roles:
-        overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True)
+        overwrites[role] = open_overwrite()
 
     higher_role_id = section.get("higher_support_role_id")
     if higher_role_id:
         higher_role = guild.get_role(int(higher_role_id))
         if higher_role:
-            overwrites[higher_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True)
+            overwrites[higher_role] = open_overwrite()
 
     g["ticket_counter"] += 1
     number = g["ticket_counter"]
     try:
-        ticket_channel = await guild.create_text_channel(name=f"🎫・{number}", category=category, overwrites=overwrites)
+        ticket_channel = await guild.create_text_channel(name=channel_name_for(number), category=category, overwrites=overwrites)
     except discord.HTTPException as e:
         if g["ticket_counter"] == number:
             g["ticket_counter"] -= 1
@@ -1236,6 +1481,8 @@ async def _create_ticket(interaction: discord.Interaction, pid: str, section_key
         "support_role_ids": support_role_ids,
         "higher_support_role_id": higher_role_id,
         "quick_replies": quick_replies,
+        "ratings_enabled": bool(panel.get("ratings_enabled", True)),
+        "added_members": [],
         "created_at": created_str,
         "last_activity": now_ts(),
         "status": STATUS_OPEN,
@@ -1243,14 +1490,13 @@ async def _create_ticket(interaction: discord.Interaction, pid: str, section_key
     STORE.mark_dirty(guild.id)
 
     staff_mentions = " | ".join(r.mention for r in support_roles) if support_roles else "فريق الدعم"
-    
-    # التصميم المطلوب بدقة مطابقة للصورة وبدون جلتشات
     embed = discord.Embed(color=parse_color(panel.get("color_hex")))
     embed.set_thumbnail(url=user.display_avatar.url)
-    embed.add_field(name="👤 [ ] : مالك التذكرة", value=f"{user.mention}\n\u200b", inline=False)
-    embed.add_field(name="🛡️ [ ] : مشرفي التذاكر", value=clip(f"{staff_mentions}\n\u200b", 1024), inline=False)
-    embed.add_field(name="🔢 [ ] : رقم التذكرة", value=f"```{number}```\n\u200b", inline=False)
-    embed.add_field(name="❓ [ ] : قسم التذكرة", value=f"```{clip(section['label'], 900)}```\n\u200b", inline=False)
+    embed.add_field(name="👤 [ ] : مالك التذكرة", value=user.mention, inline=False)
+    embed.add_field(name="🛡️ [ ] : مشرفي التذاكر", value=clip(staff_mentions, 1024), inline=False)
+    # رقم التذكرة والقسم جنب بعض (inline) من غير مسافات زيادة
+    embed.add_field(name="🔢 [ ] : رقم التذكرة", value=f"```{number}```", inline=True)
+    embed.add_field(name="❓ [ ] : قسم التذكرة", value=f"```{clip(section['label'], 900)}```", inline=True)
 
     questions = section.get("custom_questions") or []
     if questions and answers_list:
@@ -1299,11 +1545,10 @@ class PanelControlView(SafeView):
 
         if buttons_mode:
             for key, data in sections.items():
-                emj = parse_emoji(data.get("emoji"))
                 btn = discord.ui.Button(
                     label=clip(data.get("label"), 80) or "قسم",
                     style=discord.ButtonStyle.secondary,
-                    emoji=emj if isinstance(emj, (str, discord.PartialEmoji)) else "🎫",
+                    emoji=parse_emoji(data.get("emoji")),  # فاضي = من غير إيموجي
                     custom_id=f"tk:btn:{pid}:{key}",
                 )
                 btn.callback = self._make_button_cb(key)
@@ -1311,6 +1556,7 @@ class PanelControlView(SafeView):
         else:
             self.add_item(PanelSelect(pid, sections))
 
+        # زرار تحديث البانل: آخر زرار تحت خالص
         refresh = discord.ui.Button(label="تحديث البانل", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id=f"tk:refresh:{pid}", row=4)
         refresh.callback = self._refresh
         self.add_item(refresh)
@@ -1340,19 +1586,21 @@ class PanelControlView(SafeView):
 
 
 # ==============================================================================
-# 🧙 معالج إنشاء/تعديل البانل (Wizard مع نظام الإيموجي الجديد)
+# 🧙 معالج إنشاء/تعديل البانل (Wizard) — كل خطوة معاها شرح
 # ==============================================================================
 class PanelWizard:
     def __init__(self, panel_name: str, editing: bool = False):
         self.panel_name = panel_name
         self.editing = editing
         self.sections: list[str] = []
-        self.roles: dict[str, list[int]] = {}
+        self.emojis: dict[str, Optional[str]] = {}
+        self.base_roles: list[int] = []                 # رتب الدعم الأساسية (إجباري)
+        self.roles: dict[str, list[int]] = {}           # رتب إضافية لقسم معين (اختياري)
         self.cats: dict[str, Optional[str]] = {}
         self.thumbs: dict[str, Optional[str]] = {}
         self.descs: dict[str, Optional[str]] = {}
         self.questions: dict[str, list[str]] = {}
-        self.emojis: dict[str, str] = {}
+        self.ratings_enabled = True
         self.qr_all: list[str] = []
         self.qr_map: dict[str, list[str]] = {}
         self.higher_all: Optional[int] = None
@@ -1405,60 +1653,213 @@ async def ask_per_section(interaction: discord.Interaction, sections: list[str],
     await interaction.response.send_modal(SectionChunkModal(cfg, chunks, 0, {}))
 
 
-# خطوة تعيين الإيموجيات المخصصة
-async def step_custom_emojis(inter: discord.Interaction, wiz: PanelWizard):
-    async def done(i: discord.Interaction, values: dict):
+# ----- الكاتيجوري الرئيسية + طريقة العرض (بعد معلومات البانل) -----
+class CategoryPickView(SafeView):
+    def __init__(self, wiz: PanelWizard, after: ButtonCB):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        select = discord.ui.ChannelSelect(placeholder="📁 اختر الكاتيجوري الرئيسية", channel_types=[discord.ChannelType.category], min_values=1, max_values=1)
+
+        async def cb(i: discord.Interaction):
+            ch = i.guild.get_channel(select.values[0].id)
+            panel = STORE.guild(i.guild.id)["panels"].get(wiz.panel_name)
+            if not isinstance(ch, discord.CategoryChannel) or panel is None:
+                await respond(i, embed=err_embed("مقدرتش أوصل للكاتيجوري دي أو البانل اتمسح."), ephemeral=True)
+                return
+            panel["category_id"] = str(ch.id)
+            STORE.mark_dirty(i.guild.id)
+            await after(i)
+
+        select.callback = cb
+        self.add_item(select)
+        if wiz.editing:  # في التعديل ممكن تسيب الكاتيجوري الحالية زي ما هي
+            skip = discord.ui.Button(label="إبقاء الكاتيجوري الحالية", emoji="⏭️", style=discord.ButtonStyle.secondary)
+            skip.callback = after
+            self.add_item(skip)
+
+
+async def step_panel_category(inter: discord.Interaction, wiz: PanelWizard):
+    async def after(i: discord.Interaction):
+        await step_display_type(i, wiz)
+
+    await send_view(inter, "📁 الكاتيجوري الرئيسية للتذاكر",
+                    "اختر الكاتيجوري اللي هتتفتح فيها رومات التذاكر الجديدة.\n\n"
+                    "• **ليه مهمة؟** كل تذكرة بيعملها البوت بتتحط جوه الكاتيجوري دي.\n"
+                    "• لو خصصت كاتيجوري لقسم معين بعدين، التذاكر بتاعته هتتفتح فيها بدل دي." +
+                    ("\n• **إبقاء الحالية:** بيسيبها زي ما هي من غير تغيير." if wiz.editing else ""),
+                    CategoryPickView(wiz, after))
+
+
+async def step_display_type(inter: discord.Interaction, wiz: PanelWizard):
+    def pick(kind: str) -> ButtonCB:
+        async def cb(i: discord.Interaction):
+            p = STORE.guild(i.guild.id)["panels"].get(wiz.panel_name)
+            if not p:
+                await respond(i, embed=err_embed("البانل ده مش موجود."), ephemeral=True)
+                return
+            p["display_type"] = kind
+            STORE.mark_dirty(i.guild.id)
+            if wiz.editing and not wiz.sections_flow:
+                await respond(i, embed=ok_embed("✅ تم", "تم تغيير طريقة العرض. اضغط 🔄 تحديث البانل المنشور لتطبيقها."), ephemeral=True)
+            else:
+                await i.response.send_modal(SectionsConfigModal(wiz))
+        return cb
+
+    async def keep(i: discord.Interaction):
+        await respond(i, embed=ok_embed("✅ تم", "اتحفظت معلومات البانل. اضغط 🔄 تحديث البانل المنشور لتطبيقها."), ephemeral=True)
+
+    options = [
+        ("قائمة منسدلة", "📂", discord.ButtonStyle.primary, pick("menu")),
+        ("أزرار", "🔘", discord.ButtonStyle.success, pick("buttons")),
+    ]
+    if wiz.editing and not wiz.sections_flow:
+        options.append(("إبقاء الحالية", "⏭️", discord.ButtonStyle.secondary, keep))
+    await send_step(inter, "🧩 طريقة عرض الأقسام",
+                    "اختر الشكل اللي الأقسام هتظهر بيه في البانل:\n\n"
+                    "📂 **قائمة منسدلة:** كل الأقسام جوه قائمة واحدة (مناسب لو الأقسام كتير، لحد 25 قسم).\n"
+                    "🔘 **أزرار:** كل قسم زرار ظاهر قدام العضو على طول (لحد 20 قسم)." +
+                    ("\n⏭️ **إبقاء الحالية:** من غير تغيير." if len(options) > 2 else ""),
+                    options)
+
+
+# ----- إيموجيات الأقسام -----
+async def step_emojis(inter: discord.Interaction, wiz: PanelWizard):
+    async def yes(i: discord.Interaction):
+        await step_emoji_kind(i, wiz)
+
+    async def no(i: discord.Interaction):
+        wiz.emojis = {s: None for s in wiz.sections}
+        await step_support_roles(i, wiz)
+
+    await send_step(inter, "😀 إيموجي الأقسام",
+                    "**هل تريد تعيين إيموجي مخصص؟**\n\n"
+                    "✅ **نعم:** هتختار إيموجي يظهر جنب اسم القسم في البانل.\n"
+                    "⏭️ **لا:** الأقسام هتظهر من غير أي إيموجي خالص (ولا حتى إيموجي التذكرة الافتراضي).", [
+                        ("نعم، عايز إيموجي", "✅", discord.ButtonStyle.success, yes),
+                        ("لا، من غير إيموجي", "⏭️", discord.ButtonStyle.secondary, no),
+                    ])
+
+
+async def step_emoji_kind(inter: discord.Interaction, wiz: PanelWizard):
+    def pick(kind: str) -> ButtonCB:
+        async def cb(i: discord.Interaction):
+            await step_emoji_scope(i, wiz, kind)
+        return cb
+
+    await send_step(inter, "😀 نوع الإيموجي",
+                    "اختر نوع الإيموجي:\n\n"
+                    "😀 **إيموجي عادي:** إيموجي ديسكورد العادي زي 🎫 أو 💬 أو 🛠️ (اكتبه أو انسخه).\n"
+                    "🖼️ **إيموجي مخصص:** تحط إيموجي من سيرفرك بصيغة `<:name:id>` أو أيديه، "
+                    "**أو رابط صورة** والبوت يحوّله لإيموجي جديد في السيرفر (محتاج صلاحية Manage Expressions، والصورة أقل من 256KB).", [
+                        ("إيموجي عادي", "😀", discord.ButtonStyle.primary, pick("normal")),
+                        ("إيموجي مخصص", "🖼️", discord.ButtonStyle.success, pick("custom")),
+                    ])
+
+
+class SingleEmojiModal(SafeModal):
+    def __init__(self, wiz: PanelWizard, kind: str):
+        super().__init__(title="🌐 إيموجي لكل الأقسام")
+        self.wiz, self.kind = wiz, kind
+        self.box = discord.ui.TextInput(
+            label="الإيموجي" + (" (أو رابط صورة)" if kind == "custom" else ""),
+            placeholder="مثال: 🎫" if kind == "normal" else "<:name:123456789> أو أيدي أو رابط صورة",
+            max_length=300, required=True)
+        self.add_item(self.box)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)  # تحميل الصورة/إنشاء الإيموجي ممكن ياخد وقت
+        emoji, warn = await resolve_emoji(interaction.guild, interaction.client, self.box.value, self.kind, self.wiz.panel_name)
+        if warn:
+            self.wiz.warnings.append(warn)
+        self.wiz.emojis = {s: emoji for s in self.wiz.sections}
+        await step_support_roles(interaction, self.wiz)
+
+
+async def step_emoji_scope(inter: discord.Interaction, wiz: PanelWizard, kind: str):
+    async def uniform(i: discord.Interaction):
+        await i.response.send_modal(SingleEmojiModal(wiz, kind))
+
+    async def per_section_done(i: discord.Interaction, values: dict):
+        await i.response.defer(ephemeral=True)
         for sec, text in values.items():
-            wiz.emojis[sec] = text if text else "🎫"
-        await step_roles(i, wiz)
+            emoji, warn = await resolve_emoji(i.guild, i.client, text, kind, sec)
+            if warn:
+                wiz.warnings.append(f"قسم «{clip(sec, 20)}»: {warn}")
+            wiz.emojis[sec] = emoji
+        await step_support_roles(i, wiz)
 
-    async def normal_emojis(i: discord.Interaction):
-        wiz.emojis = {s: "🎫" for s in wiz.sections}
-        await step_roles(i, wiz)
+    async def per_section(i: discord.Interaction):
+        await ask_per_section(i, wiz.sections, title="🛠 إيموجي لكل قسم", label_fmt="إيموجي قسم: {sec}",
+                              placeholder="إيموجي أو <:name:id> أو رابط صورة..." if kind == "custom" else "اكتب إيموجي...",
+                              style=discord.TextStyle.short, max_length=300, required=False, on_done=per_section_done)
 
-    async def custom_input(i: discord.Interaction):
-        await ask_per_section(i, wiz.sections, title="😀 إيموجي مخصص لكل قسم", label_fmt="إيموجي قسم: {sec}",
-                              placeholder="اكتب إيموجي أو رابط الصورة...", style=discord.TextStyle.short,
-                              max_length=200, required=False, on_done=done)
-
-    async def no_emojis(i: discord.Interaction):
-        wiz.emojis = {s: "🎫" for s in wiz.sections}
-        await step_roles(i, wiz)
-
-    await send_step(inter, "❓ إيموجيات مخصصة", "هل تريد تعيين إيموجي مخصص لكل قسم؟", [
-        ("نعم أريد إيموجي مخصص", "✅", discord.ButtonStyle.success, custom_input),
-        ("لا لا أريد (افتراضي)", "⏭️", discord.ButtonStyle.secondary, no_emojis),
-    ])
+    await send_step(inter, "📍 تطبيق الإيموجي",
+                    "عاوز الإيموجي يتطبق إزاي؟\n\n"
+                    "🌐 **إيموجي واحد لكل الأقسام:** نفس الإيموجي جنب كل الأقسام (يعني للبانل كلها).\n"
+                    "🛠 **إيموجي مختلف لكل قسم:** تكتب إيموجي لكل قسم لوحده (سيب الخانة فاضية لو قسم معين مش عايز له إيموجي).", [
+                        ("إيموجي واحد للكل", "🌐", discord.ButtonStyle.primary, uniform),
+                        ("إيموجي لكل قسم", "🛠", discord.ButtonStyle.success, per_section),
+                    ])
 
 
-# ----- خطوات الـ Wizard الأصلية كاملة دون حذف أي خطوة -----
-async def step_roles(inter: discord.Interaction, wiz: PanelWizard):
+# ----- رتب الدعم (إجباري) -----
+class SupportRolesView(SafeView):
+    def __init__(self, wiz: PanelWizard):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        select = discord.ui.RoleSelect(placeholder="➕ إضافة رتب الدعم (إجباري)", min_values=1, max_values=10)
+
+        async def cb(i: discord.Interaction):
+            roles = [r for r in select.values if not r.is_default()]
+            if not roles:
+                await respond(i, content="❌ مينفعش تختار @everyone كرتبة دعم، اختار رتبة حقيقية.", ephemeral=True)
+                return
+            wiz.base_roles = [r.id for r in roles]
+            await step_extra_roles(i, wiz)
+
+        select.callback = cb
+        self.add_item(select)
+
+
+async def step_support_roles(inter: discord.Interaction, wiz: PanelWizard):
+    await send_view(inter, "🛡️ رتب الدعم الأساسية (إجباري)",
+                    "**هل تريد إضافة رتب دعم؟** الخطوة دي **أساسية ومش ممكن تتخطى** — التذكرة من غير رتب دعم مش هتشتغل خالص.\n\n"
+                    "➕ **إضافة رتب الدعم:** اختار رتبة أو أكتر (لحد 10) من القائمة تحت.\n"
+                    "• الرتب دي هتشوف كل التذاكر في **كل الأقسام**.\n"
+                    "• أصحابها هم اللي يقدروا يستلموا التذاكر ويستخدموا الردود السريعة والغرف الصوتية وكل أزرار الدعم.\n"
+                    "• مينفعش تختار @everyone.",
+                    SupportRolesView(wiz))
+
+
+async def step_extra_roles(inter: discord.Interaction, wiz: PanelWizard):
     async def done(i: discord.Interaction, values: dict):
-        roles = {}
+        extras = {}
         for sec, text in values.items():
             valid = []
             for rid in parse_ids(text):
-                if i.guild.get_role(rid):
+                role = i.guild.get_role(rid)
+                if role and not role.is_default():
                     valid.append(rid)
                 else:
-                    wiz.warnings.append(f"رتبة غير موجودة تم تجاهلها: {rid}")
-            roles[sec] = valid
-        wiz.roles = roles
+                    wiz.warnings.append(f"رتبة غير صالحة تم تجاهلها: {rid}")
+            extras[sec] = valid
+        wiz.roles = extras
         await step_categories(i, wiz)
 
     async def yes(i: discord.Interaction):
-        await ask_per_section(i, wiz.sections, title="🛡️ رتب الدعم لكل قسم", label_fmt="أيدي رتب قسم: {sec}",
-                              placeholder="اكتب أيديهات الرتب (كل أيدي في سطر)...", style=discord.TextStyle.paragraph,
-                              max_length=300, required=True, on_done=done)
+        await ask_per_section(i, wiz.sections, title="🛡️ رتب إضافية لكل قسم", label_fmt="أيدي رتب قسم: {sec}",
+                              placeholder="أيديهات الرتب (كل أيدي في سطر) أو سيبها فاضية...", style=discord.TextStyle.paragraph,
+                              max_length=300, required=False, on_done=done)
 
     async def no(i: discord.Interaction):
         wiz.roles = {s: [] for s in wiz.sections}
         await step_categories(i, wiz)
 
-    await send_step(inter, "❓ رتب الدعم", "عاوز تضيف رتب دعم معينة لكل قسم؟", [
-        ("نعم، حدد الرتب", "✅", discord.ButtonStyle.success, yes),
-        ("لا، تخطي", "⏭", discord.ButtonStyle.secondary, no),
-    ])
+    await send_step(inter, "🛡️ رتب إضافية لأقسام معينة",
+                    "عاوز تضيف رتب دعم **إضافية** لقسم معين؟\n\n"
+                    "✅ **نعم:** تكتب أيديهات رتب إضافية لكل قسم (بتتضاف فوق الرتب الأساسية). مفيدة لو قسم ليه فريق مخصص (زي قسم التقديم للإدارة).\n"
+                    "⏭️ **لا:** كل الأقسام تستخدم رتب الدعم الأساسية بس.", [
+                        ("نعم، رتب إضافية", "✅", discord.ButtonStyle.success, yes),
+                        ("لا، تخطي", "⏭", discord.ButtonStyle.secondary, no),
+                    ])
 
 
 async def step_categories(inter: discord.Interaction, wiz: PanelWizard):
@@ -1482,10 +1883,13 @@ async def step_categories(inter: discord.Interaction, wiz: PanelWizard):
         wiz.cats = {s: None for s in wiz.sections}
         await step_thumbs(i, wiz)
 
-    await send_step(inter, "❓ كاتيجوري لكل قسم", "عاوز تخصص كاتيجوري مختلف لكل قسم؟", [
-        ("نعم، حدد الكاتيجوري", "✅", discord.ButtonStyle.success, yes),
-        ("لا، استخدم الرئيسي", "⏭️", discord.ButtonStyle.secondary, no),
-    ])
+    await send_step(inter, "❓ كاتيجوري لكل قسم",
+                    "عاوز تخصص كاتيجوري مختلفة لكل قسم؟\n\n"
+                    "✅ **نعم:** كل قسم تتفتح تذاكره في كاتيجوري بتحددها (بالأيدي).\n"
+                    "⏭️ **لا:** كل الأقسام تستخدم الكاتيجوري الرئيسية اللي اخترتها.", [
+                        ("نعم، حدد الكاتيجوري", "✅", discord.ButtonStyle.success, yes),
+                        ("لا، استخدم الرئيسي", "⏭️", discord.ButtonStyle.secondary, no),
+                    ])
 
 
 async def step_thumbs(inter: discord.Interaction, wiz: PanelWizard):
@@ -1506,10 +1910,13 @@ async def step_thumbs(inter: discord.Interaction, wiz: PanelWizard):
         wiz.thumbs = {s: None for s in wiz.sections}
         await step_descs(i, wiz)
 
-    await send_step(inter, "❓ صور مصغرة (Thumbnails)", "عاوز تضيف صورة مصغرة (Thumbnail) لكل قسم؟", [
-        ("نعم، ضيف صور", "🖼️", discord.ButtonStyle.success, yes),
-        ("لا، تخطي", "⏭️", discord.ButtonStyle.secondary, no),
-    ])
+    await send_step(inter, "❓ صور مصغرة (Thumbnails)",
+                    "عاوز تضيف صورة صغيرة لكل قسم؟\n\n"
+                    "✅ **نعم:** تحط رابط صورة لكل قسم، بتظهر في رسالة التذكرة اللي بتتفتح (في التذييل).\n"
+                    "⏭️ **لا:** من غير صور.", [
+                        ("نعم، ضيف صور", "🖼️", discord.ButtonStyle.success, yes),
+                        ("لا، تخطي", "⏭️", discord.ButtonStyle.secondary, no),
+                    ])
 
 
 async def step_descs(inter: discord.Interaction, wiz: PanelWizard):
@@ -1526,20 +1933,23 @@ async def step_descs(inter: discord.Interaction, wiz: PanelWizard):
         wiz.descs = {s: None for s in wiz.sections}
         await step_questions(i, wiz)
 
-    await send_step(inter, "❓ وصف الأقسام", "عاوز تحط وصف مخصص يظهر تحت اسم كل قسم؟", [
-        ("نعم، ضيف وصف", "✅", discord.ButtonStyle.success, yes),
-        ("لا، تخطي", "⏭️", discord.ButtonStyle.secondary, no),
-    ])
+    await send_step(inter, "❓ وصف الأقسام",
+                    "عاوز تحط وصف قصير تحت اسم كل قسم؟\n\n"
+                    "✅ **نعم:** الوصف بيظهر تحت اسم القسم جوه القائمة المنسدلة (أقصى 100 حرف).\n"
+                    "⏭️ **لا:** اسم القسم بس.", [
+                        ("نعم، ضيف وصف", "✅", discord.ButtonStyle.success, yes),
+                        ("لا، تخطي", "⏭️", discord.ButtonStyle.secondary, no),
+                    ])
 
 
 async def step_questions(inter: discord.Interaction, wiz: PanelWizard):
     async def single_done(i: discord.Interaction, values: dict):
         wiz.questions = {sec: [text] for sec, text in values.items() if text}
-        await step_quick_replies(i, wiz)
+        await step_ratings(i, wiz)
 
     async def multi_done(i: discord.Interaction, values: dict):
         wiz.questions = {sec: [q.strip() for q in text.split("\n") if q.strip()][:5] for sec, text in values.items()}
-        await step_quick_replies(i, wiz)
+        await step_ratings(i, wiz)
 
     async def single(i: discord.Interaction):
         await ask_per_section(i, wiz.sections, title="📌 سؤال واحد لكل قسم", label_fmt="سؤال قسم: {sec}",
@@ -1552,19 +1962,45 @@ async def step_questions(inter: discord.Interaction, wiz: PanelWizard):
                               max_length=300, required=True, on_done=multi_done)
 
     async def yes(i: discord.Interaction):
-        await send_step(i, "❓ نظام الأسئلة", "حدد طريقة إضافة الأسئلة:", [
-            ("سؤال واحد لكل قسم", "📌", discord.ButtonStyle.primary, single),
-            ("أكثر من سؤال لكل قسم", "📋", discord.ButtonStyle.success, multi),
-        ])
+        await send_step(i, "❓ نظام الأسئلة",
+                        "حدد طريقة إضافة الأسئلة:\n\n"
+                        "📌 **سؤال واحد لكل قسم:** العضو بيجاوب سؤال واحد قبل فتح التذكرة.\n"
+                        "📋 **أكثر من سؤال:** لحد 5 أسئلة لكل قسم (كل سؤال في سطر).", [
+                            ("سؤال واحد لكل قسم", "📌", discord.ButtonStyle.primary, single),
+                            ("أكثر من سؤال لكل قسم", "📋", discord.ButtonStyle.success, multi),
+                        ])
 
     async def no(i: discord.Interaction):
         wiz.questions = {}
+        await step_ratings(i, wiz)
+
+    await send_step(inter, "❓ أسئلة التذكرة",
+                    "عاوز تظهر أسئلة للعضو قبل ما التذكرة تتفتح؟\n\n"
+                    "✅ **نعم:** العضو بيجاوب أسئلة (في نافذة) وإجاباته بتظهر في رسالة التذكرة للمشرفين.\n"
+                    "⏭️ **لا:** التذكرة بتتفتح على طول.", [
+                        ("نعم، ضيف أسئلة", "✅", discord.ButtonStyle.success, yes),
+                        ("لا، بدون أسئلة", "⏭", discord.ButtonStyle.secondary, no),
+                    ])
+
+
+async def step_ratings(inter: discord.Interaction, wiz: PanelWizard):
+    async def yes(i: discord.Interaction):
+        wiz.ratings_enabled = True
         await step_quick_replies(i, wiz)
 
-    await send_step(inter, "❓ أسئلة التذكرة", "عاوز تعمل أسئلة تظهر للعضو لما يفتح التذكرة؟", [
-        ("نعم، ضيف أسئلة", "✅", discord.ButtonStyle.success, yes),
-        ("لا، بدون أسئلة", "⏭", discord.ButtonStyle.secondary, no),
-    ])
+    async def no(i: discord.Interaction):
+        wiz.ratings_enabled = False
+        await step_quick_replies(i, wiz)
+
+    await send_step(inter, "⭐ نظام التقييمات",
+                    "**هل تريد تفعيل نظام التقييمات في التذكرة؟**\n\n"
+                    "✅ **نعم:** لما الإداري يحذف التذكرة، صاحبها يقيّم الخدمة (من 1 لـ 5 نجوم) قبل ما الروم يتحذف، "
+                    "والتقييمات بتظهر في إحصائيات المشرفين.\n"
+                    "⏭️ **لا:** نظام التقييمات بيتلغي تماماً — التذكرة بتتحذف على طول من غير سؤال تقييم، "
+                    "وعدد التقييمات مش بيظهر في الإحصائيات.", [
+                        ("نعم، فعّل التقييمات", "✅", discord.ButtonStyle.success, yes),
+                        ("لا، بدون تقييمات", "⏭️", discord.ButtonStyle.secondary, no),
+                    ])
 
 
 class SingleQuickRepliesModal(SafeModal, title="🌐 ردود سريعة موحدة"):
@@ -1599,18 +2035,24 @@ async def step_quick_replies(inter: discord.Interaction, wiz: PanelWizard):
                               max_length=400, required=True, on_done=custom_done)
 
     async def yes(i: discord.Interaction):
-        await send_step(i, "⚡ الردود السريعة", "حدد طريقة إدخال الردود السريعة:", [
-            ("ردود موحدة لكل الأقسام", "🌐", discord.ButtonStyle.primary, all_sections),
-            ("ردود مختلفة لكل قسم", "🛠", discord.ButtonStyle.success, custom),
-        ])
+        await send_step(i, "⚡ الردود السريعة",
+                        "حدد طريقة إدخال الردود السريعة:\n\n"
+                        "🌐 **ردود موحدة:** نفس الردود لكل الأقسام.\n"
+                        "🛠 **ردود لكل قسم:** كل قسم له ردوده الخاصة.", [
+                            ("ردود موحدة لكل الأقسام", "🌐", discord.ButtonStyle.primary, all_sections),
+                            ("ردود مختلفة لكل قسم", "🛠", discord.ButtonStyle.success, custom),
+                        ])
 
     async def no(i: discord.Interaction):
         await step_higher(i, wiz)
 
-    await send_step(inter, "⚡ الردود السريعة", "عاوز تعمل ردود سريعة جاهزة للمشرفين يختاروا منها؟", [
-        ("نعم، ضيف ردود سريعة", "✅", discord.ButtonStyle.success, yes),
-        ("لا، تخطي", "⏭️", discord.ButtonStyle.secondary, no),
-    ])
+    await send_step(inter, "⚡ الردود السريعة",
+                    "عاوز تعمل ردود جاهزة للمشرفين يختاروا منها بضغطة؟\n\n"
+                    "✅ **نعم:** قائمة ردود سريعة بتظهر جوه التذكرة للمشرفين فقط (والتذكرة مفتوحة).\n"
+                    "⏭️ **لا:** من غير ردود سريعة.", [
+                        ("نعم، ضيف ردود سريعة", "✅", discord.ButtonStyle.success, yes),
+                        ("لا، تخطي", "⏭️", discord.ButtonStyle.secondary, no),
+                    ])
 
 
 class SingleHigherRoleModal(SafeModal, title="⭐ رتبة إدارية موحدة"):
@@ -1645,18 +2087,24 @@ async def step_higher(inter: discord.Interaction, wiz: PanelWizard):
                               max_length=30, required=False, on_done=custom_done)
 
     async def yes(i: discord.Interaction):
-        await send_step(i, "👑 رتبة الإدارة العليا", "حدد طريقة إدخال رتبة الإدارة العليا:", [
-            ("رتبة واحدة للكل", "⭐", discord.ButtonStyle.primary, single),
-            ("رتبة مختلفة لكل قسم", "🛠", discord.ButtonStyle.success, custom),
-        ])
+        await send_step(i, "👑 رتبة الإدارة العليا",
+                        "حدد طريقة إدخال رتبة الإدارة العليا:\n\n"
+                        "⭐ **رتبة واحدة للكل:** نفس الرتبة العليا لكل الأقسام.\n"
+                        "🛠 **رتبة لكل قسم:** رتبة عليا مختلفة لكل قسم (سيب الخانة فاضية لو مش عايز).", [
+                            ("رتبة واحدة للكل", "⭐", discord.ButtonStyle.primary, single),
+                            ("رتبة مختلفة لكل قسم", "🛠", discord.ButtonStyle.success, custom),
+                        ])
 
     async def no(i: discord.Interaction):
         await step_color(i, wiz)
 
-    await send_step(inter, "👑 رتبة الإدارة العليا", "عاوز تخصص رتبة إدارة عليا للتصعيد؟", [
-        ("نعم، ضيف رتبة عليا", "✅", discord.ButtonStyle.success, yes),
-        ("لا، تخطي", "⏭️", discord.ButtonStyle.secondary, no),
-    ])
+    await send_step(inter, "👑 رتبة الإدارة العليا",
+                    "عاوز تخصص رتبة إدارة عليا للتصعيد؟\n\n"
+                    "✅ **نعم:** بيظهر زرار 👑 تصعيد للإدارة جوه التذكرة، وبيمنشن الرتبة دي لما حد يضغطه.\n"
+                    "⏭️ **لا:** زرار التصعيد مش بيظهر في تذاكر القسم.", [
+                        ("نعم، ضيف رتبة عليا", "✅", discord.ButtonStyle.success, yes),
+                        ("لا، تخطي", "⏭️", discord.ButtonStyle.secondary, no),
+                    ])
 
 
 async def step_color(inter: discord.Interaction, wiz: PanelWizard):
@@ -1666,7 +2114,7 @@ async def step_color(inter: discord.Interaction, wiz: PanelWizard):
         return cb
 
     async def yes(i: discord.Interaction):
-        await send_step(i, "🎨 اختيار اللون", "اختر اللون المناسب للإيمبد:", [
+        await send_step(i, "🎨 اختيار اللون", "اختر اللون المناسب للإيمبد (بانل التذاكر ورسالة التذكرة):", [
             ("🟢 أخضر", None, discord.ButtonStyle.success, pick("00FF88")),
             ("🔵 أزرق", None, discord.ButtonStyle.primary, pick("3498DB")),
             ("🔴 أحمر", None, discord.ButtonStyle.danger, pick("FF3333")),
@@ -1674,10 +2122,13 @@ async def step_color(inter: discord.Interaction, wiz: PanelWizard):
             ("🟣 بنفسجي", None, discord.ButtonStyle.secondary, pick("9B59B6")),
         ])
 
-    await send_step(inter, "🎨 لون الإيمبد", "عاوز تختار لون مخصص للإيمبد؟", [
-        ("نعم، حدد لون الإيمبد", "🎨", discord.ButtonStyle.success, yes),
-        ("لا، تخطي باللون الافتراضي", "⏭️", discord.ButtonStyle.secondary, pick("2B2D31")),
-    ])
+    await send_step(inter, "🎨 لون الإيمبد",
+                    "عاوز تختار لون للإيمبد؟\n\n"
+                    "✅ **نعم:** تختار لون من القايمة.\n"
+                    "⏭️ **لا:** اللون الرمادي الداكن الافتراضي.", [
+                        ("نعم، حدد لون الإيمبد", "🎨", discord.ButtonStyle.success, yes),
+                        ("لا، تخطي باللون الافتراضي", "⏭️", discord.ButtonStyle.secondary, pick("2B2D31")),
+                    ])
 
 
 async def finish_wizard(interaction: discord.Interaction, wiz: PanelWizard, color_hex: str):
@@ -1686,6 +2137,10 @@ async def finish_wizard(interaction: discord.Interaction, wiz: PanelWizard, colo
     if not panel:
         await respond(interaction, embed=err_embed("البانل ده اتمسح من البيانات."), ephemeral=True)
         return
+    base = list(dict.fromkeys(wiz.base_roles))
+    if not base:  # حماية: التذكرة من غير رتب دعم مش هتشتغل
+        await respond(interaction, embed=err_embed("لازم تضيف رتبة دعم واحدة على الأقل، ابدأ من تعديل الأقسام تاني."), ephemeral=True)
+        return
 
     old_keys = {s.get("label"): k for k, s in panel.get("sections", {}).items()}
     new_sections: dict[str, dict] = {}
@@ -1693,13 +2148,15 @@ async def finish_wizard(interaction: discord.Interaction, wiz: PanelWizard, colo
         key = old_keys.get(name)
         while not key or key in new_sections:
             key = uuid.uuid4().hex[:8]
+        emoji = wiz.emojis.get(name)
         new_sections[key] = {
             "label": name,
             "description": wiz.descs.get(name),
             "custom_questions": wiz.questions.get(name, []),
             "quick_replies": wiz.qr_all or wiz.qr_map.get(name, []),
-            "emoji": wiz.emojis.get(name, "🎫"),  # حفظ الإيموجي المخصص هنا
-            "support_role_ids": wiz.roles.get(name, []),
+            "emoji": emoji,
+            "emoji_set": bool(emoji),
+            "support_role_ids": list(dict.fromkeys(base + wiz.roles.get(name, []))),
             "higher_support_role_id": wiz.higher_all or wiz.higher_map.get(name),
             "category_id": wiz.cats.get(name),
             "thumbnail_url": wiz.thumbs.get(name),
@@ -1709,13 +2166,31 @@ async def finish_wizard(interaction: discord.Interaction, wiz: PanelWizard, colo
 
     panel["color_hex"] = color_hex
     panel["sections"] = new_sections
+    panel["ratings_enabled"] = wiz.ratings_enabled
     panel["has_questions"] = any(wiz.questions.values())
     STORE.mark_dirty(interaction.guild.id)
 
-    desc = f"تم حفظ البانل (**{wiz.panel_name}**).\nاستخدم الأمر `/ticket` عشان تنشره في أي روم."
+    desc = (f"تم حفظ البانل (**{wiz.panel_name}**).\nاستخدم الأمر `/ticket` عشان تنشره في أي روم."
+            f"\n\n⭐ **التقييمات:** {'مفعلة' if wiz.ratings_enabled else 'متوقفة'}")
     if wiz.warnings:
         desc += "\n\n⚠️ **تنبيهات:**\n" + "\n".join(f"• {w}" for w in wiz.warnings[:8])
-    await respond(interaction, embed=discord.Embed(title="🎨 تم حفظ البانل", description=clip(desc, 4000), color=parse_color(color_hex)), ephemeral=True)
+    kwargs: dict[str, Any] = dict(
+        embed=discord.Embed(title="🎨 تم حفظ البانل", description=clip(desc, 4000), color=parse_color(color_hex)), ephemeral=True)
+
+    if panel.get("published"):
+        panel_name = wiz.panel_name
+
+        async def do_refresh(i: discord.Interaction):
+            p = STORE.guild(i.guild.id)["panels"].get(panel_name)
+            if not p:
+                await respond(i, embed=err_embed("البانل ده مش موجود."), ephemeral=True)
+                return
+            await i.response.defer(ephemeral=True)
+            ok, fail = await refresh_published_panel(i.guild, panel_name, p)
+            await i.followup.send(embed=ok_embed("🔄 تم التحديث", f"اتحدّث `{ok}` بانل منشور" + (f" (وفشل `{fail}`)" if fail else "") + "."), ephemeral=True)
+
+        kwargs["view"] = ChoiceView([("تحديث البانل المنشور الآن", "🔄", discord.ButtonStyle.primary, do_refresh)])
+    await respond(interaction, **kwargs)
 
 
 class SectionsConfigModal(SafeModal):
@@ -1725,6 +2200,7 @@ class SectionsConfigModal(SafeModal):
         self.sections_box = discord.ui.TextInput(
             label="أسماء الأقسام (كل قسم في سطر)",
             default=clip(default, 1000),
+            placeholder="كل سطر = قسم في البانل (أقصى 25 قسم)",
             style=discord.TextStyle.paragraph,
             max_length=1000,
             required=True,
@@ -1742,8 +2218,7 @@ class SectionsConfigModal(SafeModal):
             await respond(interaction, embed=err_embed("لازم تكتب قسم واحد على الأقل!"), ephemeral=True)
             return
         self.wiz.sections = sections
-        # الانتقال لخطوة الإيموجيات المخصصة الجديدة
-        await step_custom_emojis(interaction, self.wiz)
+        await step_emojis(interaction, self.wiz)
 
 
 class PanelInfoModal(SafeModal):
@@ -1757,29 +2232,26 @@ class PanelInfoModal(SafeModal):
         thumb = panel.get("thumbnail_url") or ""
         images_default = f"{img} | {thumb}" if img and thumb else (img or (f"| {thumb}" if thumb else ""))
 
-        self.name_box = discord.ui.TextInput(label="اسم البانل", default=panel_name if editing else "", max_length=50, required=True)
-        self.desc_box = discord.ui.TextInput(label="الوصف (بدون أي إضافات أوتوماتيكية)", default=clip(panel.get("desc") or "محتوى البانل الخاص بك...", 500),
-                                             style=discord.TextStyle.paragraph, max_length=500, required=True)
+        self.name_box = discord.ui.TextInput(label="اسم البانل (داخلي، مش بيظهر للأعضاء)", default=panel_name if editing else "",
+                                             placeholder="اسم تفرّق بيه البانلات عن بعض", max_length=50, required=True)
+        self.title_box = discord.ui.TextInput(label="عنوان الإيمبد (فاضي = بدون عنوان)", default=clip(panel.get("title") or "", 100),
+                                              placeholder="اكتب العنوان اللي إنت عاوزه، أو سيبه فاضي", max_length=100, required=False)
+        self.desc_box = discord.ui.TextInput(label="الوصف (اللي هيظهر في البانل)", default=clip(panel.get("desc") or "", 500),
+                                             placeholder="اكتب الوصف اللي إنت عاوزه بالظبط", style=discord.TextStyle.paragraph, max_length=500, required=True)
         self.images_box = discord.ui.TextInput(label="روابط الصور (صورة البانل | الثامبنيل)", default=clip(images_default, 1000),
                                                placeholder="رابط الصورة الكبيرة | رابط الثامبنيل (اختياري)", max_length=1000, required=False)
-        self.footer_box = discord.ui.TextInput(label="نص التذييل (Footer)", default=clip(panel.get("custom_footer_info") or "", 200),
-                                               placeholder="معلومات إضافية تحت في الإيمبد", max_length=200, required=False)
-        self.category_box = discord.ui.TextInput(label="أيدي الكاتيجوري (Category ID)", default=str(panel.get("category_id") or ""), max_length=30, required=True)
-        for box in (self.name_box, self.desc_box, self.images_box, self.footer_box, self.category_box):
+        self.footer_box = discord.ui.TextInput(label="نص التذييل (فاضي = بدون تذييل)", default=clip(panel.get("custom_footer_info") or "", 200),
+                                               placeholder="نص صغير تحت الإيمبد (اختياري)", max_length=200, required=False)
+        for box in (self.name_box, self.title_box, self.desc_box, self.images_box, self.footer_box):
             self.add_item(box)
 
     async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
-        g = STORE.guild(interaction.guild.id)
+        g = STORE.guild(guild.id)
         panels = g["panels"]
         p_name = clean_panel_name(self.name_box.value)
         if not p_name:
             await respond(interaction, embed=err_embed("اسم البانل غير صالح!"), ephemeral=True)
-            return
-
-        ids = parse_ids(self.category_box.value)
-        if not ids or not isinstance(guild.get_channel(ids[0]), discord.CategoryChannel):
-            await respond(interaction, embed=err_embed("أيدي الكاتيجوري غير صحيح أو مش موجود في السيرفر!"), ephemeral=True)
             return
 
         warnings = []
@@ -1813,52 +2285,29 @@ class PanelInfoModal(SafeModal):
             if len(panels) >= 25:
                 await respond(interaction, embed=err_embed("وصلت للحد الأقصى (25 بانل)."), ephemeral=True)
                 return
-            panel = {"pid": uuid.uuid4().hex[:8], "sections": {}, "display_type": "menu", "color_hex": "2b2d31"}
+            panel = {"pid": uuid.uuid4().hex[:8], "sections": {}, "display_type": "menu", "color_hex": "2b2d31",
+                     "ratings_enabled": True, "published": []}
             panels[p_name] = panel
 
         panel.update({
-            "title": "🎫 الدعم الفني والمساعدة",
+            "title": self.title_box.value.strip(),   # فاضي لو العضو ما كتبش (مفيش عنوان افتراضي)
             "desc": self.desc_box.value,
             "image_url": img_url,
             "thumbnail_url": thumb_url,
             "custom_footer_info": self.footer_box.value.strip(),
-            "category_id": str(ids[0]),
         })
         STORE.mark_dirty(guild.id)
 
         wiz = PanelWizard(p_name, editing=self.editing)
+        wiz.sections_flow = not self.editing   # في الإنشاء بنكمل لحد الأقسام، في التعديل بنقف بعد طريقة العرض
         wiz.warnings = warnings
-
-        def set_display(kind: str, continue_wizard: bool) -> ButtonCB:
-            async def cb(i: discord.Interaction):
-                p = STORE.guild(i.guild.id)["panels"].get(p_name)
-                if not p:
-                    await respond(i, embed=err_embed("البانل ده مش موجود."), ephemeral=True)
-                    return
-                p["display_type"] = kind
-                STORE.mark_dirty(i.guild.id)
-                if continue_wizard:
-                    await i.response.send_modal(SectionsConfigModal(wiz))
-                else:
-                    await respond(i, embed=ok_embed("✅ تم", "تم تغيير طريقة العرض. اضغط 🔄 تحديث البانل في البانل المنشور."), ephemeral=True)
-            return cb
-
-        if self.editing:
-            desc = f"تم حفظ بيانات **{p_name}**.\nلو عاوز تغير طريقة عرض الأقسام اختار:"
-        else:
-            desc = f"تم حفظ بيانات **{p_name}**.\nاختر طريقة عرض الأقسام:"
         if warnings:
-            desc += "\n\n⚠️ " + "\n⚠️ ".join(warnings)
-        embed = discord.Embed(title="✅ تم حفظ معلومات البانل", description=desc, color=COLOR_GREEN)
-        view = ChoiceView([
-            ("قائمة منسدلة", "📂", discord.ButtonStyle.primary, set_display("menu", not self.editing)),
-            ("أزرار", "🔘", discord.ButtonStyle.success, set_display("buttons", not self.editing)),
-        ])
-        await respond(interaction, embed=embed, view=view, ephemeral=True)
+            await respond(interaction, embed=err_embed("\n".join(f"• {w}" for w in warnings), "⚠️ تنبيهات"), ephemeral=True)
+        await step_panel_category(interaction, wiz)
 
 
 class LogChannelModal(SafeModal, title="📋 تحديد روم اللوج"):
-    channel_id_box = discord.ui.TextInput(label="أيدي الروم (Channel ID)", placeholder="اكتب أيدي الروم هنا...", max_length=30, required=True)
+    channel_id_box = discord.ui.TextInput(label="أيدي الروم (Channel ID)", placeholder="روم بيتبعت فيه سجل كل تذكرة بتتحذف", max_length=30, required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
         ids = parse_ids(self.channel_id_box.value)
@@ -1923,13 +2372,44 @@ class TicketSetupMainView(SafeView):
                     return
                 labels = [s.get("label", "") for s in panel.get("sections", {}).values()]
                 default = "\n".join(labels) if labels else DEFAULT_SECTIONS_TEXT
-                await i.response.send_modal(SectionsConfigModal(PanelWizard(name, editing=True), default=default))
+                wiz = PanelWizard(name, editing=True)
+                wiz.sections_flow = True
+                await i.response.send_modal(SectionsConfigModal(wiz, default=default))
+
+            async def toggle_ratings(i: discord.Interaction):
+                panel = STORE.guild(i.guild.id)["panels"].get(name)
+                if not panel:
+                    await respond(i, embed=err_embed("البانل ده مش موجود."), ephemeral=True)
+                    return
+                panel["ratings_enabled"] = not panel.get("ratings_enabled", True)
+                STORE.mark_dirty(i.guild.id)
+                state = "مفعلة ✅" if panel["ratings_enabled"] else "متوقفة ❌"
+                await respond(i, embed=ok_embed("⭐ نظام التقييمات", f"التقييمات في **{name}** دلوقتي: {state}\n_(مش بيأثر على التذاكر المفتوحة حالياً، بيطبق على التذاكر الجديدة)_"), ephemeral=True)
+
+            async def refresh_panel(i: discord.Interaction):
+                panel = STORE.guild(i.guild.id)["panels"].get(name)
+                if not panel:
+                    await respond(i, embed=err_embed("البانل ده مش موجود."), ephemeral=True)
+                    return
+                if not panel.get("published"):
+                    await respond(i, embed=err_embed("البانل ده لسه ما اتنشرش بأمر /ticket (أو اتنشر قبل التحديث ومحتاج نشر تاني).", "⚠️ تنبيه"), ephemeral=True)
+                    return
+                await i.response.defer(ephemeral=True)
+                ok, fail = await refresh_published_panel(i.guild, name, panel)
+                await i.followup.send(embed=ok_embed("🔄 تم التحديث", f"اتحدّث `{ok}` بانل منشور" + (f" (وفشل `{fail}`)" if fail else "") + "."), ephemeral=True)
 
             view = ChoiceView([
                 ("تعديل الوصف والمعلومات", "✏️", discord.ButtonStyle.primary, edit_info),
                 ("تعديل الأقسام والأسئلة", "📝", discord.ButtonStyle.success, edit_sections),
+                ("تفعيل/إيقاف التقييمات", "⭐", discord.ButtonStyle.secondary, toggle_ratings),
+                ("تحديث البانل المنشور", "🔄", discord.ButtonStyle.secondary, refresh_panel),
             ], timeout=120)
-            await respond(inter, embed=discord.Embed(title="⚙️ تعديل البانل", description="عاوز تعدل ايه في البانل ده؟", color=COLOR_DARK), view=view, ephemeral=True)
+            await send_view(inter, "⚙️ تعديل البانل",
+                            "عاوز تعدل ايه في البانل ده؟\n\n"
+                            "✏️ **الوصف والمعلومات:** العنوان والوصف والصور والتذييل والكاتيجوري وطريقة العرض.\n"
+                            "📝 **الأقسام والأسئلة:** إعادة ضبط الأقسام (الإيموجي، رتب الدعم، الأسئلة، الردود...).\n"
+                            "⭐ **التقييمات:** تشغيل أو إيقاف نظام التقييم للتذاكر الجديدة.\n"
+                            "🔄 **تحديث البانل المنشور:** يطبّق آخر تعديلاتك على رسائل البانل اللي اتنشرت في الرومات.", view)
 
         embed = discord.Embed(title="⚙️ تعديل بانل", description="اختر البانل من القائمة:", color=COLOR_DARK)
         await respond(interaction, embed=embed, view=PanelPickView(list(panels.keys()), "اختر البانل المراد تعديله...", on_pick), ephemeral=True)
@@ -1960,30 +2440,33 @@ class TicketSetupMainView(SafeView):
     async def show_staff_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
         g = STORE.guild(interaction.guild.id)
         staff_stats = g["staff_stats"]
+        # التقييمات بتظهر بس لو في بانل مفعّل فيه التقييم (أو فيه تقييمات مسجلة قبل كده)
+        ratings_on = any(p.get("ratings_enabled", True) for p in g["panels"].values()) or any(
+            s.get("ratings_count", 0) for s in staff_stats.values())
         embed = discord.Embed(
             title="📊 إحصائيات الدعم الفني",
-            description="ترتيب وأداء المشرفين حسب إجمالي النجوم/النقاط المجمعة:\n",
+            description=("ترتيب وأداء المشرفين حسب إجمالي النجوم/النقاط المجمعة:\n" if ratings_on
+                         else "ترتيب وأداء المشرفين حسب عدد التذاكر المستلمة:\n"),
             color=COLOR_DARK,
             timestamp=discord.utils.utcnow(),
         )
         if not staff_stats:
-            embed.add_field(name="مفيش بيانات", value="مفيش تذاكر اتستلمت أو اتقيمت لحد دلوقتي.", inline=False)
+            embed.add_field(name="مفيش بيانات", value="مفيش تذاكر اتستلمت لحد دلوقتي." + (" أو اتقيمت" if ratings_on else ""), inline=False)
         else:
-            top = sorted(staff_stats.items(), key=lambda x: x[1].get("total_stars", 0), reverse=True)[:10]
+            sort_key = (lambda x: x[1].get("total_stars", 0)) if ratings_on else (lambda x: x[1].get("claimed", 0))
+            top = sorted(staff_stats.items(), key=sort_key, reverse=True)[:10]
             medals = ["🥇", "🥈", "🥉"]
             for idx, (s_id, data) in enumerate(top):
                 member = interaction.guild.get_member(int(s_id))
                 display = clip(member.display_name if member else s_id, 60)
-                ratings = data.get("ratings_count", 0)
-                total = data.get("total_stars", 0)
-                avg = f"{total / ratings:.1f}" if ratings else "—"
                 prefix = medals[idx] if idx < len(medals) else f"#{idx + 1}"
-                embed.add_field(
-                    name=f"{prefix} المشرف: {display}",
-                    value=(f"👤 <@{s_id}>\n💼 التذاكر المستلمة: `{data.get('claimed', 0)}`\n"
-                           f"⭐ مجموع النقاط/النجوم: `{total}`\n📈 المتوسط: `{avg}` ({ratings} تقييم)\n\u200b"),
-                    inline=False,
-                )
+                value = f"👤 <@{s_id}>\n💼 التذاكر المستلمة: `{data.get('claimed', 0)}`\n"
+                if ratings_on:
+                    ratings = data.get("ratings_count", 0)
+                    total = data.get("total_stars", 0)
+                    avg = f"{total / ratings:.1f}" if ratings else "—"
+                    value += f"⭐ مجموع النقاط/النجوم: `{total}`\n📈 المتوسط: `{avg}` ({ratings} تقييم)\n"
+                embed.add_field(name=f"{prefix} المشرف: {display}", value=value, inline=False)
         embed.set_footer(text="نظام إدارة التذاكر")
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
@@ -2013,17 +2496,32 @@ class TicketPublishSelectView(SafeView):
                 await respond(interaction, content="❌ البانل ده مش موجود أو مفيهوش أقسام.", ephemeral=True)
                 return
 
+            # التذكرة من غير رتب دعم مش هتشتغل: نمنع النشر ونقول إزاي نصلحها
+            missing = [s.get("label", "؟") for s in p_data["sections"].values() if not s.get("support_role_ids")]
+            if missing:
+                await respond(interaction, embed=err_embed(
+                    "الأقسام دي من غير رتب دعم، والتذكرة من غير رتب دعم مش هتشتغل:\n" + "\n".join(f"• {clip(m, 40)}" for m in missing[:10]) +
+                    "\n\nروح `/setup` ← تعديل بانل ← **تعديل الأقسام والأسئلة** وضيف رتب الدعم (الخطوة إجبارية).",
+                    "🛡️ رتب الدعم ناقصة"), ephemeral=True)
+                return
+
             view = PanelControlView(interaction.guild.id, p_data["pid"])
             embed = build_panel_embed(chosen, p_data)
+            sent = None
             try:
                 try:
-                    await interaction.channel.send(embed=embed, view=view)
+                    sent = await interaction.channel.send(embed=embed, view=view)
                 except discord.HTTPException:
                     log.exception("فشل نشر البانل بالصور، هجرب من غيرها")
-                    await interaction.channel.send(embed=strip_embed_media(embed), view=PanelControlView(interaction.guild.id, p_data["pid"]))
+                    sent = await interaction.channel.send(embed=strip_embed_media(embed), view=PanelControlView(interaction.guild.id, p_data["pid"]))
             except discord.HTTPException as e:
                 await respond(interaction, content=f"❌ حصلت مشكلة أثناء إرسال البانل: {e}", ephemeral=True)
                 return
+            # نسجّل مكان الرسالة عشان نقدر نحدّثها بعدين من لوحة التعديل
+            published = p_data.setdefault("published", [])
+            published.append({"channel_id": interaction.channel.id, "message_id": sent.id})
+            del published[:-25]
+            STORE.mark_dirty(interaction.guild.id)
             await respond(interaction, content=f"✅ تم إرسال البانل **{chosen}** بنجاح.", ephemeral=True)
 
         select.callback = select_callback
@@ -2084,7 +2582,9 @@ class ZiuoUltimateTicketsCog(commands.Cog):
         if not g:
             return
         cid = str(channel.id)
-        if cid in g["active_tickets"]:
+        t = g["active_tickets"].get(cid)
+        if t is not None:
+            await delete_ticket_voice(channel.guild, t)  # الروم الصوتي بيتحذف مع التذكرة حتى لو اتحذفت يدوياً
             retire_ticket(channel.guild.id, cid, "الروم اتحذف يدوياً")
         if g["pending_ratings"].pop(cid, None) is not None:
             STORE.mark_dirty(channel.guild.id)
@@ -2101,7 +2601,10 @@ class ZiuoUltimateTicketsCog(commands.Cog):
     async def setup_tickets(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="⚙️ لوحة إعدادات التذاكر",
-            description="اختر من الأزرار التالية لإنشاء أو إدارة البانلات:",
+            description=("اختر من الأزرار التالية لإنشاء أو إدارة البانلات:\n\n"
+                         "🚀 **إنشاء بانل جديد:** خطوات مشروحة لإنشاء بانل كامل.\n"
+                         "⚙️ **تعديل بانل:** تعديل البانلات الموجودة وتحديثها.\n"
+                         "🗑 **حذف بانل** ┊ 📋 **روم اللوج** ┊ 📊 **إحصائيات المشرفين**"),
             color=COLOR_DARK,
             timestamp=discord.utils.utcnow(),
         )
