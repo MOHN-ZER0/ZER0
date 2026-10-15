@@ -2055,4 +2055,166 @@ class UltimateLevelsCog(commands.Cog):
     async def top(self, interaction: discord.Interaction):
         await interaction.response.defer()
         cfg = await SETTINGS.get(interaction.guild.id)
-        view = TopLeaderboardVie
+        view = TopLeaderboardView(interaction.guild, interaction.user.id, enabled_types(cfg))
+        embed = await view.build_embed()
+        view._rebuild()
+        view.message = await interaction.followup.send(embed=embed, view=view, wait=True)
+
+    @app_commands.command(name="rewards", description="عرض جدول رتب والمستويات المتاحة في السيرفر")
+    @app_commands.guild_only()
+    async def rewards(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send(embed=await self.build_rewards_embed(interaction.guild), ephemeral=True)
+
+    @app_commands.command(name="level", description="استعراض مستواك ورانكك الحالي")
+    @app_commands.guild_only()
+    async def level(self, interaction: discord.Interaction, member: Optional[discord.Member] = None):
+        target = member or interaction.user
+        if target.bot:
+            await interaction.response.send_message(embed=err_embed("البوتات معندهاش مستويات 😄"), ephemeral=True)
+            return
+        await interaction.response.defer()
+        await interaction.followup.send(embed=await self.build_level_embed(interaction.guild, target))
+
+    @app_commands.command(name="level_notify", description="اختار طريقة إشعارك لما تترقى (منشن / من غير منشن / خاص / بدون)")
+    @app_commands.guild_only()
+    @app_commands.describe(mode="طريقة الإشعار")
+    @app_commands.choices(mode=[app_commands.Choice(name=v, value=k) for k, v in NOTIFY_MODES.items()])
+    async def level_notify(self, interaction: discord.Interaction, mode: app_commands.Choice[str]):
+        await interaction.response.defer(ephemeral=True)
+        await run_db(set_user_fields_sync, interaction.guild.id, interaction.user.id, {"notify_mode": mode.value})
+        await interaction.followup.send(embed=ok_embed("✅ تم", f"إشعارات الترقية بتاعتك دلوقتي: **{NOTIFY_MODES[mode.value]}**"), ephemeral=True)
+
+    # ---------- أوامر الإدارة (تعديل يدوي) ----------
+    async def _manual_apply(self, interaction: discord.Interaction, member: discord.Member, sets_by_type: dict[str, int],
+                            remove_roles: bool, action: str):
+        """sets_by_type = {نوع: XP جديد}. بيعدّل النقاط والليفل بالظبط ويزامن الرتب ويسجل في اللوج."""
+        await interaction.response.defer(ephemeral=True)
+        gid = interaction.guild.id
+        await self.flush_xp()  # نحفظ اللي في الذاكرة الأول عشان ما يتخبطش مع التعديل
+        old = await run_db(get_user_sync, gid, member.id) or {}
+        sets: dict[str, Any] = {}
+        for t, xp in sets_by_type.items():
+            xp = max(0, min(int(xp), MAX_XP))
+            sets[f"{t}_xp"] = xp
+            sets[f"{t}_level"] = level_from_xp(xp)
+        doc = await run_db(set_user_fields_sync, gid, member.id, sets)
+        _TOP_CACHE.clear()
+        cfg = await SETTINGS.get(gid)
+        given, removed = await self.sync_rewards(member, cfg, doc_levels(doc), remove=remove_roles)
+
+        lines = []
+        for t in sets_by_type:
+            lines.append(f"• **{TYPE_LABEL[t]}:** XP `{int(old.get(f'{t}_xp', 0))}` ⟵ `{int(doc[f'{t}_xp'])}` ┃ ليفل `{int(old.get(f'{t}_level', 0))}` ⟵ `{int(doc[f'{t}_level'])}`")
+            if not cfg[f"{t}_xp_enabled"]:
+                lines.append(f"  ⚠️ _قسم {TYPE_LABEL[t]} متوقف حالياً (التعديل اتحفظ بس مش ظاهر للأعضاء)_")
+        if given:
+            lines.append("🎁 **رتب اتمنحت:** " + " ".join(r.mention for r in given))
+        if removed:
+            lines.append("➖ **رتب اتسحبت:** " + " ".join(r.mention for r in removed))
+        embed = ok_embed(f"✅ {action}", f"العضو: {member.mention}\n" + "\n".join(lines))
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+        logs = interaction.guild.get_channel(cfg["logs_channel"]) if cfg["logs_channel"] else None
+        if isinstance(logs, discord.abc.Messageable) and logs.permissions_for(interaction.guild.me).send_messages:
+            try:
+                log_embed = discord.Embed(title="🛠️ تعديل يدوي في المستويات", color=COLOR_ORANGE, timestamp=discord.utils.utcnow(),
+                                          description=f"• **الإجراء:** {action}\n• **بواسطة:** {interaction.user.mention}\n• **العضو:** {member.mention}\n" + "\n".join(lines[:6]))
+                await logs.send(embed=log_embed, allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException:
+                pass
+
+    @app_commands.command(name="set_xp", description="[الإدارة] ضبط نقاط الـ XP لعضو في قسم معين")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(member="العضو", section="القسم", value="قيمة الـ XP الجديدة", remove_roles="سحب رتب المكافآت اللي مبقاش يستحقها؟")
+    @app_commands.choices(section=TYPE_CHOICES)
+    async def set_xp(self, interaction: discord.Interaction, member: discord.Member, section: app_commands.Choice[str],
+                     value: app_commands.Range[int, 0, MAX_XP], remove_roles: bool = False):
+        if member.bot:
+            await respond(interaction, embed=err_embed("البوتات معندهاش مستويات."), ephemeral=True)
+            return
+        await self._manual_apply(interaction, member, {section.value: value}, remove_roles, "ضبط XP")
+
+    @app_commands.command(name="set_level", description="[الإدارة] ضبط ليفل عضو في قسم معين")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(member="العضو", section="القسم", level="الليفل الجديد", remove_roles="سحب رتب المكافآت اللي مبقاش يستحقها؟")
+    @app_commands.choices(section=TYPE_CHOICES)
+    async def set_level(self, interaction: discord.Interaction, member: discord.Member, section: app_commands.Choice[str],
+                        level: app_commands.Range[int, 0, MAX_LEVEL], remove_roles: bool = False):
+        if member.bot:
+            await respond(interaction, embed=err_embed("البوتات معندهاش مستويات."), ephemeral=True)
+            return
+        await self._manual_apply(interaction, member, {section.value: cumulative_xp(level)}, remove_roles, "ضبط ليفل")
+
+    @app_commands.command(name="add_xp", description="[الإدارة] إضافة أو خصم نقاط XP من عضو (اكتب رقم سالب للخصم)")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(member="العضو", section="القسم", amount="عدد النقاط (سالب للخصم)", remove_roles="سحب رتب المكافآت اللي مبقاش يستحقها؟")
+    @app_commands.choices(section=TYPE_CHOICES)
+    async def add_xp(self, interaction: discord.Interaction, member: discord.Member, section: app_commands.Choice[str],
+                     amount: app_commands.Range[int, -MAX_XP, MAX_XP], remove_roles: bool = False):
+        if member.bot:
+            await respond(interaction, embed=err_embed("البوتات معندهاش مستويات."), ephemeral=True)
+            return
+        await self.flush_xp()
+        doc = await run_db(get_user_sync, interaction.guild.id, member.id) or {}
+        current = int(doc.get(f"{section.value}_xp", 0))
+        await self._manual_apply(interaction, member, {section.value: current + amount}, remove_roles, "إضافة/خصم XP")
+
+    @app_commands.command(name="reset_xp", description="[الإدارة] تصفير مستويات عضو (قسم معين أو كل الأقسام)")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(member="العضو", section="القسم (فاضي = كل الأقسام)", remove_roles="سحب رتب المكافآت اللي مبقاش يستحقها؟")
+    @app_commands.choices(section=TYPE_CHOICES)
+    async def reset_xp(self, interaction: discord.Interaction, member: discord.Member,
+                       section: Optional[app_commands.Choice[str]] = None, remove_roles: bool = True):
+        types = [section.value] if section else list(TYPES)
+        await self._manual_apply(interaction, member, {t: 0 for t in types}, remove_roles, "تصفير")
+
+    @app_commands.command(name="reset_all_xp", description="[الإدارة] تصفير مستويات كل أعضاء السيرفر (خطير! بيطلب تأكيد)")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(section="القسم (فاضي = كل الأقسام)")
+    @app_commands.choices(section=TYPE_CHOICES)
+    async def reset_all_xp(self, interaction: discord.Interaction, section: Optional[app_commands.Choice[str]] = None):
+        types = [section.value for _ in [0]] if section else list(TYPES)
+        label = TYPE_LABEL[types[0]] if section else "كل الأقسام"
+
+        async def do_reset(i: discord.Interaction):
+            await self.flush_xp()
+            count = await run_db(reset_all_sync, i.guild.id, types)
+            _TOP_CACHE.clear()
+            await i.followup.send(embed=ok_embed("🧹 تم التصفير", f"اتصفّر **{label}** لـ `{count}` عضو.\n_رتب المكافآت مش بتتسحب أوتوماتيك._"), ephemeral=True)
+
+        embed = discord.Embed(title="⚠️ تأكيد التصفير الشامل",
+                              description=f"هتصفّر **{label}** لكل أعضاء السيرفر وده **مش ممكن يترجع**. متأكد؟ (30 ثانية)", color=COLOR_RED)
+        await interaction.response.send_message(embed=embed, view=ConfirmView(interaction.user.id, do_reset, "أيوه، صفّر الكل"), ephemeral=True)
+
+    @app_commands.command(name="setup_levels", description="[الإدارة] لوحة تحكم المستويات والشات")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    async def setup_levels(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        view = LevelsAdminPanelView(panel_inter=interaction)
+        await interaction.followup.send(embed=await panel_embed(interaction.guild), view=view, ephemeral=True)
+
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.MissingPermissions):
+            await respond(interaction, content="❌ الأمر ده للإدارة فقط.", ephemeral=True)
+            return
+        log.exception("خطأ في أمر سلاش", exc_info=error)
+        await report_error(interaction)
+
+
+async def setup(bot: commands.Bot):
+    if _db is None:
+        raise RuntimeError("MONGODB_URI غير موجود في ملف .env، نظام المستويات محتاج قاعدة بيانات.")
+    await bot.add_cog(UltimateLevelsCog(bot))
