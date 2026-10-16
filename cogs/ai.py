@@ -34,7 +34,7 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:ge
 # AI_DEBUG=1 يعرض سبب الفشل في الرد. بعد ما كل حاجة تشتغل خليه 0
 DEBUG_ERRORS = _env("AI_DEBUG", "1") == "1"
 
-TRIGGER = "يا ذكاء اصطناعي"
+TRIGGER = "زيرو"
 HISTORY_LEN = 10
 COOLDOWN_SECONDS = 3
 MAX_INPUT_CHARS = 2000
