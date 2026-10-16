@@ -27,7 +27,7 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 
 # اختياري: لو حطيت مفتاح Gemini هيشتغل كاحتياطي لو Groq وقع
-GEMINI_API_KEY = _env("GEMINI_API_KEY")
+GEMINI_API_KEY = _env("AQ.Ab8RN6KGYMxYI8CfkxaWVtDxRpu67I2Kgk5EhQLJix9sk7LUvA")
 GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
