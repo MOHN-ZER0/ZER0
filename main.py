@@ -38,7 +38,7 @@ async def on_ready():
     guild_count = len(bot.guilds)
     
     # إعداد النص المطلوب مع إضافة عدد السيرفرات
-    status_text = f"افضل بوت دعم مجاني متوفر ب كل ما تريده و عدد مستخدمينا الحالي {guild_count}"
+    status_text = f"افضل بوت دعم مجاني متوفر به كل ما تريده و عدد مستخدمينا الحالي هو  `{guild_count}`"
     
     # ضبط الحالة لتظهر بنوع Watching ومع العلامة الصفراء/الهلال (Idle 🌙)
     activity = discord.Activity(type=discord.ActivityType.watching, name=status_text)
