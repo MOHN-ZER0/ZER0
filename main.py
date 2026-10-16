@@ -34,7 +34,16 @@ async def setup_hook():
 
 @bot.event
 async def on_ready():
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Zero Bot | ZIUO - MC Ultimate"))
+    # جلب عدد السيرفرات الحالية التي يتواجد بها البوت
+    guild_count = len(bot.guilds)
+    
+    # إعداد النص المطلوب مع إضافة عدد السيرفرات
+    status_text = f"Best bot support, our current user count {guild_count}"
+    
+    # ضبط الحالة لتظهر بنوع Watching ومع العلامة الصفراء/الهلال (Idle 🌙)
+    activity = discord.Activity(type=discord.ActivityType.watching, name=status_text)
+    await bot.change_presence(status=discord.Status.idle, activity=activity)
+    
     print(f"✅ Zero Bot is Online as {bot.user}!")
 
 # جلب التوكن بأمان من متغيرات البيئة
