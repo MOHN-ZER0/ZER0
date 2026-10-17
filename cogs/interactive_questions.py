@@ -511,8 +511,9 @@ class InteractiveQuestions(commands.Cog):
         state[guild_id_str] = used_questions
         self.save_state(state)
 
+        # تم تغيير العنوان إلى شكل مميز وزاهي، وإلغاء الـ Mention نهائياً ووضع اسم العضو فقط في الـ Footer
         embed = discord.Embed(
-            title="🎲 ╎ فقرة الأسئلة والمهام التفاعلية",
+            title="✨ ╎ الأسئلة والمهام التفاعلية",
             description=f"> **{selected_question}**",
             color=discord.Color.blurple()
         )
@@ -521,7 +522,7 @@ class InteractiveQuestions(commands.Cog):
             embed.set_thumbnail(url=guild.icon.url)
 
         embed.set_footer(
-            text=f"طلب بواسطة: {author.display_name}", 
+            text=author.display_name, 
             icon_url=author.display_avatar.url
         )
         return embed
@@ -531,10 +532,10 @@ class InteractiveQuestions(commands.Cog):
         if message.author.bot or not message.guild:
             return
 
-        # ملاحظة: تتطلب تفعيل Message Content Intent في Discord Developer Portal ليتم قراءة نص الرسالة
         if message.content.strip().lower() in self.trigger_words:
             embed = self.get_random_question_embed(message.guild, message.author)
-            await message.reply(embed=embed)
+            # إرسال الرسالة كـ رد عادي بدون منشن (mention_author=False) لضمان عدم منشن العضو
+            await message.reply(embed=embed, mention_author=False)
 
     @commands.hybrid_command(name="question", description="الحصول على سؤال أو تحدٍ تفاعلي عشوائي")
     async def question_slash(self, ctx):
