@@ -22,12 +22,12 @@ def _env(name: str, default: str = "") -> str:
 
 
 # ==================== الإعدادات ====================
-GROQ_API_KEY = _env("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")
+GROQ_API_KEY = _env("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 
 # اختياري: مفتاح Gemini كاحتياطي. لا تحطه هنا أبداً — حطه في .env فقط.
-GEMINI_API_KEY = _env("AQ.Ab8RN6JSdo7dxXToJTvfd4QgL-jVrDsnhzah6-Ontoe1TR1lqA")
+GEMINI_API_KEY = _env("GEMINI_API_KEY")
 GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
@@ -404,4 +404,4 @@ class AICog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(AICog(bot) 
+    await bot.add_cog(AICog(bot))
