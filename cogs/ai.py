@@ -22,22 +22,23 @@ def _env(name: str, default: str = "") -> str:
 
 
 # ==================== الإعدادات ====================
-GROQ_API_KEY = _env("GROQ_API_KEY")
+GROQ_API_KEY = _env("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")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 
-# اختياري: لو حطيت مفتاح Gemini هيشتغل كاحتياطي لو Groq وقع
-GEMINI_API_KEY = _env("GEMINI_API_KEY")
+# اختياري: مفتاح Gemini كاحتياطي. لا تحطه هنا أبداً — حطه في .env فقط.
+GEMINI_API_KEY = _env("AQ.Ab8RN6JSdo7dxXToJTvfd4QgL-jVrDsnhzah6-Ontoe1TR1lqA")
 GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-# AI_DEBUG=1 يعرض سبب الفشل في الرد
+# AI_DEBUG=1 يعرض سبب الفشل في الرد (خليه 0 في الإنتاج)
 DEBUG_ERRORS = _env("AI_DEBUG", "0") == "1"
 
 TRIGGER = "زيرو"
 HISTORY_LEN = 10
 COOLDOWN_SECONDS = 3
 MAX_INPUT_CHARS = 2000
+MAX_OUTPUT_TOKENS = 400
 DISCORD_LIMIT = 1900
 
 SYSTEM_PROMPT = (
@@ -68,6 +69,8 @@ else:
 
 
 def split_message(text: str, limit: int = DISCORD_LIMIT) -> list[str]:
+    if not text:
+        return []
     chunks = []
     while len(text) > limit:
         cut = text.rfind("\n", 0, limit)
@@ -112,9 +115,13 @@ class AICog(commands.Cog):
         try:
             doc = ai_config_col.find_one({"_id": "ai_config_main"})
             if not doc:
-                ai_config_col.insert_one({"_id": "ai_config_main", "guilds": {}})
+                ai_config_col.update_one(
+                    {"_id": "ai_config_main"},
+                    {"$setOnInsert": {"guilds": {}}},
+                    upsert=True,
+                )
                 return {}
-            return doc.get("guilds", {})
+            return doc.get("guilds", {}) or {}
         except Exception as e:
             log.error("فشل قراءة الإعدادات من MongoDB: %s", e)
             return {}
@@ -144,7 +151,12 @@ class AICog(commands.Cog):
         last_error = "Groq: فشل غير معروف"
 
         for model in GROQ_MODELS:
-            payload = {"model": model, "messages": messages, "temperature": 0.7, "max_tokens": 1024}
+            payload = {
+                "model": model,
+                "messages": messages,
+                "temperature": 0.8,
+                "max_tokens": MAX_OUTPUT_TOKENS,
+            }
             for attempt in range(2):
                 try:
                     async with self.session.post(GROQ_URL, headers=headers, json=payload) as resp:
@@ -186,7 +198,7 @@ class AICog(commands.Cog):
         payload = {
             "system_instruction": {"parts": [{"text": system_text}]},
             "contents": contents,
-            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024},
+            "generationConfig": {"temperature": 0.8, "maxOutputTokens": MAX_OUTPUT_TOKENS},
         }
         headers = {"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"}
         url = GEMINI_URL.format(model=GEMINI_MODEL)
@@ -241,7 +253,8 @@ class AICog(commands.Cog):
             self.history[key].append({"role": "user", "content": prompt})
             self.history[key].append({"role": "assistant", "content": text})
             if len(self.history) > 1000:
-                self.history.clear()
+                for k in list(self.history)[:200]:
+                    self.history.pop(k, None)
         return text, err
 
     # ---------- أوامر السلاش ----------
@@ -258,7 +271,8 @@ class AICog(commands.Cog):
     async def ai_control(self, interaction: discord.Interaction, action: app_commands.Choice[str]):
         guild_id = str(interaction.guild_id)
         channel_id = interaction.channel_id
-        channels: list = self.settings.setdefault(guild_id, {"channels": []})["channels"]
+        guild_cfg = self.settings.setdefault(guild_id, {})
+        channels: list = guild_cfg.setdefault("channels", [])
         value = action.value
 
         if value == "enable":
@@ -314,7 +328,7 @@ class AICog(commands.Cog):
         if isinstance(error, app_commands.MissingPermissions):
             text = "❌ الأمر ده للإدارة فقط."
         else:
-            log.exception("خطأ في أمر سلاش", exc_info=error)
+            log.exception("خطأ في أمر سلاش: %s", error)
             text = "❌ حصل خطأ غير متوقع."
         if interaction.response.is_done():
             await interaction.followup.send(text, ephemeral=True)
@@ -348,7 +362,7 @@ class AICog(commands.Cog):
         if not clean:
             if is_mentioned or has_trigger:
                 await message.reply(
-                    "مرحباً بك! أنا نظام الذكاء الاصطناعي، كيف يمكنني مساعدتك اليوم؟",
+                    "أيوة يا صاحبي؟ 👀",
                     allowed_mentions=no_ping,
                     mention_author=False,
                 )
@@ -358,6 +372,11 @@ class AICog(commands.Cog):
         if now - self.last_used.get(message.author.id, 0) < COOLDOWN_SECONDS:
             return
         self.last_used[message.author.id] = now
+
+        if len(self.last_used) > 5000:
+            for uid, t in list(self.last_used.items()):
+                if now - t > 3600:
+                    self.last_used.pop(uid, None)
 
         clean = clean[:MAX_INPUT_CHARS]
         key = (message.channel.id, message.author.id)
@@ -371,6 +390,8 @@ class AICog(commands.Cog):
                 reply += f"\n```{err[:600]}```"
 
         chunks = split_message(reply)
+        if not chunks:
+            return
         await message.reply(chunks[0], allowed_mentions=no_ping, mention_author=False)
         for chunk in chunks[1:]:
             await message.channel.send(chunk, allowed_mentions=no_ping)
@@ -383,4 +404,4 @@ class AICog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(AICog(bot))
+    await bot.add_cog(AICog(bot) 
