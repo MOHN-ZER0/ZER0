@@ -17,7 +17,7 @@ log = logging.getLogger("ai_cog")
 
 
 def _env(name: str, default: str = "") -> str:
-    """قراءة متغير بيئة مع تنظيف المسافات وعلامات التنصيص الزايدة."""
+    """قراءة متغير بيئة مع تنظيف المسافات وعلامات التنصيص الزائدة."""
     return os.getenv(name, default).strip().strip('"').strip("'")
 
 
@@ -27,12 +27,12 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 
 # اختياري: لو حطيت مفتاح Gemini هيشتغل كاحتياطي لو Groq وقع
-GEMINI_API_KEY = _env("AQ.Ab8RN6KGYMxYI8CfkxaWVtDxRpu67I2Kgk5EhQLJix9sk7LUvA")
+GEMINI_API_KEY = _env("GEMINI_API_KEY")
 GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-# AI_DEBUG=1 يعرض سبب الفشل في الرد. بعد ما كل حاجة تشتغل خليه 0
-DEBUG_ERRORS = _env("AI_DEBUG", "1") == "1"
+# AI_DEBUG=1 يعرض سبب الفشل في الرد
+DEBUG_ERRORS = _env("AI_DEBUG", "0") == "1"
 
 TRIGGER = "زيرو"
 HISTORY_LEN = 10
@@ -124,7 +124,6 @@ class AICog(commands.Cog):
     async def save_config(self):
         async with self._save_lock:
             try:
-                # pymongo متزامن، فبنشغله في thread عشان ما يعطلش البوت
                 await asyncio.to_thread(self._save_config_sync)
             except Exception as e:
                 log.error("فشل حفظ الإعدادات في MongoDB: %s", e)
@@ -132,7 +131,7 @@ class AICog(commands.Cog):
     # ---------- مزودو الذكاء الاصطناعي ----------
     async def _call_groq(self, messages: list[dict]) -> tuple[str | None, str]:
         if not GROQ_API_KEY:
-            return None, "Groq: المفتاح GROQ_API_KEY غير موجود (اتأكد من ملف .env أو متغيرات الاستضافة)"
+            return None, "Groq: المفتاح GROQ_API_KEY غير موجود"
 
         headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
         last_error = "Groq: فشل غير معروف"
@@ -153,7 +152,7 @@ class AICog(commands.Cog):
                         last_error = f"Groq {resp.status} ({model}): {body}"
                         log.warning(last_error)
                         if resp.status in (401, 403):
-                            return None, last_error  # مفتاح مرفوض أو IP محجوب
+                            return None, last_error
                         if resp.status == 429 or resp.status >= 500:
                             await asyncio.sleep(1.5 * (attempt + 1))
                             continue
@@ -185,6 +184,7 @@ class AICog(commands.Cog):
         headers = {"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"}
         url = GEMINI_URL.format(model=GEMINI_MODEL)
 
+        err = "Gemini: فشل غير معروف"
         for attempt in range(2):
             try:
                 async with self.session.post(url, headers=headers, json=payload) as resp:
@@ -274,7 +274,7 @@ class AICog(commands.Cog):
 
         await interaction.response.send_message(msg, ephemeral=True)
 
-    @app_commands.command(name="ai_test", description="[إدارة] اختبار الاتصال بالذكاء الاصطناعي ومعرفة سبب أي مشكلة")
+    @app_commands.command(name="ai_test", description="[إدارة] اختبار الاتصال بالذكاء الاصطناعي")
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
@@ -297,7 +297,7 @@ class AICog(commands.Cog):
             lines.append(f"❌ فشل الاتصال:\n```{err[:900]}```")
         await interaction.followup.send("\n".join(lines), ephemeral=True)
 
-    @app_commands.command(name="ai_reset", description="مسح ذاكرة المحادثة بينك وبين الذكاء الاصطناعي في هذه القناة")
+    @app_commands.command(name="ai_reset", description="مسح ذاكرة المحادثة بينك وبين الذكاء الاصطناعي")
     @app_commands.guild_only()
     async def ai_reset(self, interaction: discord.Interaction):
         self.history.pop((interaction.channel_id, interaction.user.id), None)
