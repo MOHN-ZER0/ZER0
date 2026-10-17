@@ -24,11 +24,12 @@ def _env(name: str, default: str = "") -> str:
 # ==================== الإعدادات ====================
 GROQ_API_KEY = _env("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+# تم تحديث الموديلات لأسماء محدثة ومدعومة من Groq
+GROQ_MODELS = ["llama-3.3-70b-specdec", "llama-3.1-8b-instant", "llama3-70b-8192"]
 
-# اختياري: مفتاح Gemini كاحتياطي. لا تحطه هنا أبداً — حطه في .env فقط.
+# مفتاح Gemini الجديد
 GEMINI_API_KEY = _env("GEMINI_API_KEY")
-GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-1.5-flash")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 # AI_DEBUG=1 يعرض سبب الفشل في الرد (خليه 0 في الإنتاج)
