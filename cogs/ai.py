@@ -24,10 +24,10 @@ def _env(name: str, default: str = "") -> str:
 # ==================== الإعدادات ====================
 GROQ_API_KEY = _env("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-# تم تحديث الموديلات لأسماء محدثة ومدعومة من Groq
-GROQ_MODELS = ["llama-3.3-70b-specdec", "llama-3.1-8b-instant", "llama3-70b-8192"]
+# تم تحديث الموديلات لأسماء محدثة ورسمية وشغالة على Groq
+GROQ_MODELS = ["llama-3.3-70b-versatile", "llama3-8b-8192"]
 
-# مفتاح Gemini الجديد
+# مفتاح وحجم موديل Gemini مع الرابط الرسمي الصحيح
 GEMINI_API_KEY = _env("GEMINI_API_KEY")
 GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-1.5-flash")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -201,8 +201,8 @@ class AICog(commands.Cog):
             "contents": contents,
             "generationConfig": {"temperature": 0.8, "maxOutputTokens": MAX_OUTPUT_TOKENS},
         }
-        headers = {"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"}
-        url = GEMINI_URL.format(model=GEMINI_MODEL)
+        url = f"{GEMINI_URL.format(model=GEMINI_MODEL)}?key={GEMINI_API_KEY}"
+        headers = {"Content-Type": "application/json"}
 
         err = "Gemini: فشل غير معروف"
         for attempt in range(2):
