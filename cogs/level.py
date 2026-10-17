@@ -1,5 +1,5 @@
 """
-⚡ نظام المستويات والتفاعل (النسخة الاحترافية v3)
+⚡ نظام المستويات والتفاعل (النسخة الاحترافية v3 - مصلحة بالكامل)
 
 ملاحظات مهمة:
 - لكل عضو 3 مستويات منفصلة: نصي / صوتي / رياكشن. والأقسام المتوقفة بتختفي تماماً من رسائل الأعضاء.
@@ -33,7 +33,7 @@ log = logging.getLogger("levels")
 try:
     from zoneinfo import ZoneInfo
     LEVELS_TZ = ZoneInfo(os.getenv("LEVELS_TZ", "Africa/Cairo"))
-except Exception:  # لو مكتبة tzdata مش موجودة على ويندوز
+except Exception:  
     LEVELS_TZ = datetime.timezone(datetime.timedelta(hours=2))
 
 # ==============================================================================
@@ -58,19 +58,18 @@ NOTIFY_MODES = {"mention": "منشن في الإعلان", "silent": "إعلان
 PLACEHOLDERS = ("user", "level", "type", "xp", "server", "role")
 
 MAX_LEVEL = 1000
-SETTINGS_TTL = 120          # ثواني: مدة كاش الإعدادات
-SHORTCUT_COOLDOWN = 5       # ثواني بين استخدام الاختصارات
-TOP_CACHE_TTL = 15          # ثواني: كاش صفحات التوب (يخفف الضغط على السيرفرات الكبيرة)
-XP_FLUSH_SECONDS = 5        # كل كام ثانية بنحفظ دفعة الـ XP
+SETTINGS_TTL = 120          
+SHORTCUT_COOLDOWN = 5       
+TOP_CACHE_TTL = 15          
+XP_FLUSH_SECONDS = 5        
 INACTIVITY_DAYS = 5
 RESET_HOUR = 12
 PER_PAGE = 5
 
-# إعدادات خوارزمية توزيع الـ XP
-DUPLICATE_WINDOW = 300      # نفس الرسالة بالظبط خلال المدة دي = 0 XP
-VOICE_ALONE_FACTOR = 0.5    # لو العضو لوحده في الروم الصوتي
-VOICE_VIDEO_FACTOR = 1.25   # كاميرا أو بث
-FATIGUE_FLOOR = 0.35        # أقل نسبة بيوصلها الـ XP بعد الإفراط
+DUPLICATE_WINDOW = 300      
+VOICE_ALONE_FACTOR = 0.5    
+VOICE_VIDEO_FACTOR = 1.25   
+FATIGUE_FLOOR = 0.35        
 FATIGUE_WINDOW = 3600
 
 # ==============================================================================
@@ -148,16 +147,13 @@ NEW_USER_DEFAULTS = _new_user_defaults()
 
 
 async def run_db(fn, *args, **kwargs):
-    """بيشغل عمليات pymongo (المتزامنة) في thread عشان ما تعطلش البوت."""
     return await asyncio.to_thread(fn, *args, **kwargs)
 
 
 # ==============================================================================
-# 🧮 منحنى المستويات (تصاعدي الصعوبة) والوقت
+# 🧮 منحنى المستويات والوقت
 # ==============================================================================
 def cumulative_xp(level: int) -> int:
-    """إجمالي الـ XP المطلوب للوصول لمستوى معين. الانتقال من ليفل n للي بعده بيكلف 5n² + 50n + 100،
-    يعني كل ليفل أصعب من اللي قبله بشكل تدريجي (ليفل 10 ≈ 4.7 ألف، ليفل 50 ≈ 107 ألف، ليفل 100 ≈ 1.9 مليون)."""
     L = max(0, min(int(level), MAX_LEVEL))
     return 5 * (L - 1) * L * (2 * L - 1) // 6 + 25 * L * (L - 1) + 100 * L
 
@@ -186,7 +182,6 @@ def level_bounds(level: int) -> tuple[int, int]:
     return cumulative_xp(level), cumulative_xp(level + 1)
 
 
-# ----- المنحنى القديم (للترحيب بالبيانات القديمة بس) -----
 def _legacy_cumulative(level: int) -> int:
     return 0 if level <= 0 else int(level * 300 + ((level - 1) ** 1.2) * 120)
 
@@ -199,7 +194,6 @@ def _legacy_level_from_xp(xp: int) -> int:
 
 
 def convert_legacy_xp(old_xp: int) -> int:
-    """بيحوّل XP قديم لمنحنى جديد مع الحفاظ على الليفل ونسبة التقدم جواه."""
     lvl = _legacy_level_from_xp(old_xp)
     lo, hi = _legacy_cumulative(lvl), _legacy_cumulative(lvl + 1)
     frac = (old_xp - lo) / (hi - lo) if hi > lo else 0.0
@@ -212,14 +206,13 @@ def local_now() -> datetime.datetime:
 
 
 def period_key(period: str, now: Optional[datetime.datetime] = None) -> str:
-    """مفتاح الفترة الحالية: بيتغير لحظة التصفير (12 ظهراً)."""
     now = now or local_now()
     if period == "day":
         return (now - datetime.timedelta(hours=RESET_HOUR)).date().isoformat()
-    if period == "week":  # الأسبوع بيبدأ الجمعة 12 ظهراً
+    if period == "week":  
         shifted = (now - datetime.timedelta(hours=RESET_HOUR)).date()
         return str((shifted - datetime.date(2000, 1, 7)).days // 7)
-    shifted = now + datetime.timedelta(hours=RESET_HOUR)  # الشهر بيتصفر آخر يوم 12 ظهراً
+    shifted = now + datetime.timedelta(hours=RESET_HOUR)  
     return f"{shifted.year}-{shifted.month:02d}"
 
 
@@ -259,7 +252,7 @@ def format_remaining(seconds: int) -> str:
 # ==============================================================================
 def clip(text: Any, limit: int) -> str:
     text = str(text or "")
-    return text if len(text) <= limit else text[: max(limit - 1, 0)] + "…"
+    return text if len(text) <= limit else text[: max(limit - 1, 0)] + "..."
 
 
 def ok_embed(title: str, description: str) -> discord.Embed:
@@ -292,14 +285,12 @@ def normalize_ar(text: str) -> str:
 
 
 def convert_legacy_braces(text: str) -> str:
-    """الرسائل القديمة بالأقواس {user} بتتحول للأقواس المربعة [user]."""
     for name in PLACEHOLDERS:
         text = text.replace("{" + name + "}", "[" + name + "]")
     return text
 
 
 def parse_type(text: str) -> str:
-    """نوع واحد (للأحداث): text / voice / reaction / all."""
     t = normalize_ar(text)
     if "نص" in t or "text" in t:
         return "text"
@@ -311,7 +302,6 @@ def parse_type(text: str) -> str:
 
 
 def parse_req_type(text: str) -> Optional[str]:
-    """شرط رتبة المكافأة: نوع واحد، أو أنواع مجمّعة بـ + (لازم الليفل في كلهم)، أو all (كل الأنواع المفعلة)، أو any (أي نوع)."""
     t = normalize_ar(text)
     types = []
     if "نص" in t or "text" in t:
@@ -322,7 +312,7 @@ def parse_req_type(text: str) -> Optional[str]:
         types.append("reaction")
     tokens = {x for x in re.split(r"[^\w]+", t) if x}
     if len(types) >= 2 and tokens & {"او", "or"}:
-        return None  # "نصي أو صوتي" غير واضحة: لازم يستخدم + أو أي
+        return None  
     if types:
         return "+".join(types)
     if tokens & {"اي", "any", "ايا", "ايهم"}:
@@ -376,7 +366,7 @@ class SafeModal(discord.ui.Modal):
 
 
 # ==============================================================================
-# ⚙️ الإعدادات (مع كاش عشان ما نضربش الداتابيز مع كل رسالة)
+# ⚙️ الإعدادات
 # ==============================================================================
 def load_settings_sync(gid: int) -> dict:
     try:
@@ -439,7 +429,7 @@ class SettingsCache:
         try:
             cfg = await run_db(load_settings_sync, gid)
         except Exception:
-            if gid in self._data:  # الداتابيز واقعة: نكمل بآخر إعدادات معروفة
+            if gid in self._data:  
                 self._ts[gid] = now - SETTINGS_TTL + 30
                 return self._data[gid]
             raise
@@ -461,14 +451,13 @@ async def update_settings(gid: int, **fields):
 
 
 def enabled_types(cfg: dict) -> list[str]:
-    """الأقسام المفعّلة فقط (لو النظام كله متوقف → مفيش أقسام)."""
     if not cfg["status"]:
         return []
     return [t for t in TYPES if cfg[f"{t}_xp_enabled"]]
 
 
 # ==============================================================================
-# 🗄️ عمليات قاعدة البيانات (كلها متزامنة وبتتشغل في thread)
+# 🗄️ عمليات قاعدة البيانات
 # ==============================================================================
 def ensure_indexes_sync():
     specs = [
@@ -489,12 +478,10 @@ def ensure_indexes_sync():
         try:
             col.create_index(keys, **opts)
         except Exception:
-            log.warning("تعذر إنشاء index %s (غالباً فيه بيانات مكررة قديمة)", keys, exc_info=True)
+            log.warning("تعذر إنشاء index %s", keys, exc_info=True)
 
 
 def migrate_user_stats_sync() -> int:
-    """ترحيل لمرة واحدة: (1) فصل الـ xp القديم لنصي/صوتي/رياكشن (2) تحويل XP للمنحنى الجديد مع الحفاظ على الليفل.
-    كل مستند بيتعلّم curve_v=2 بعد ما يتحول، فلو الترحيل وقف في النص بيكمل من غير ما يحوّل نفس المستند مرتين."""
     ops, count = [], 0
     for doc in user_stats_col.find({"curve_v": {"$exists": False}}):
         voice_xp = int(doc.get("voice_xp", 0) or 0)
@@ -524,7 +511,6 @@ def migrate_user_stats_sync() -> int:
 
 
 def apply_batch_sync(gid: int, items: list, ts: int) -> dict:
-    """بيطبّق دفعة XP لكذا عضو مرة واحدة (bulk) وبيرجّع بياناتهم الجديدة في استعلام واحد."""
     ops = []
     for uid, inc in items:
         defaults = {k: v for k, v in NEW_USER_DEFAULTS.items() if k not in inc and k != "last_active_timestamp"}
@@ -539,7 +525,6 @@ def apply_batch_sync(gid: int, items: list, ts: int) -> dict:
 
 
 def claim_level_sync(gid: int, uid: int, field: str, old: int, new: int) -> bool:
-    """تحديث ذري للمستوى: بيرجع True مرة واحدة بس (يمنع الإعلان المكرر)."""
     cond: dict[str, Any] = {field: old}
     if old == 0:
         cond = {"$or": [{field: 0}, {field: {"$exists": False}}]}
@@ -619,7 +604,6 @@ def remove_rewards_sync(gid: int, role_ids: list) -> int:
 
 
 def toggle_ignored_sync(col, key: str, gid: int, ids: list) -> tuple[list, list]:
-    """لو العنصر مستبعد بالفعل بيشيله، ولو لأ بيضيفه."""
     existing = {d[key] for d in col.find({"guild_id": gid, key: {"$in": ids}})}
     added, removed = [], []
     for i in ids:
@@ -645,7 +629,6 @@ def set_multipliers_sync(kind: str, gid: int, ids: list, value: float):
             col.update_one({"guild_id": gid, key: i}, {"$set": {"multiplier": value}}, upsert=True)
 
 
-# ----- كاش صفحات التوب (للسيرفرات الكبيرة) -----
 _TOP_CACHE: dict[tuple, tuple[float, int, list]] = {}
 
 
@@ -663,13 +646,12 @@ async def get_top_page(gid: int, field: str, extra: dict, skip: int, limit: int)
 
 
 # ==============================================================================
-# 🧠 منطق الـ XP والمضاعفات والمكافآت
+# 🧠 منطق الـ XP والمضاعفات
 # ==============================================================================
 def visible_filter(cfg: dict) -> dict:
-    """فلتر التوب والترتيب: بيخفي اللي غادروا السيرفر، وغير النشطين لو خيار طرد المتخاذلين شغال."""
     f: dict[str, Any] = {"left": {"$ne": True}}
     if cfg["inactivity_decay_enabled"]:
-        cutoff = (int(time.time()) // 60) * 60 - INACTIVITY_DAYS * 86400  # مقرّب للدقيقة عشان الكاش يشتغل
+        cutoff = (int(time.time()) // 60) * 60 - INACTIVITY_DAYS * 86400  
         f["last_active_timestamp"] = {"$gte": cutoff}
     return f
 
@@ -703,9 +685,7 @@ def compute_multiplier(cfg: dict, member: discord.Member, type_: str, channel_id
     return mult
 
 
-# ----- شروط رتب المكافآت (نوع واحد / مجمّع / كل الأنواع / أي نوع) -----
 def reward_possible(req: str, enabled: list[str]) -> bool:
-    """هل الرتبة دي ممكن تتاخد أصلاً؟ (لو شرطها بيتطلب قسم متوقف بتتخفي)."""
     if not enabled:
         return False
     if req in ("any", "all"):
@@ -727,7 +707,6 @@ def reward_involves(req: str, type_: str) -> bool:
 
 
 def last_reward_role(guild: discord.Guild, cfg: dict, levels: dict, enabled: list[str], involving: Optional[str] = None) -> Optional[discord.Role]:
-    """آخر رتبة مكافأة وصلها العضو (الأعلى ليفل، ولو متساويين الأعلى ترتيباً)."""
     best = None
     for rw in cfg["rewards"]:
         if not reward_satisfied(rw["req_type"], rw["level"], levels, enabled):
@@ -760,12 +739,10 @@ def progress_bar(pct: float, mult: float, width: int = 12) -> str:
     return "".join(pattern[i % len(pattern)] for i in range(filled)) + "⬛" * (width - filled)
 
 
-# ----- جودة الرسالة (جزء من خوارزمية توزيع الـ XP) -----
 _STRIP_RE = re.compile(r"<[^>]+>|https?://\S+")
 
 
 def message_quality(content: str, attachments: int) -> tuple[float, str]:
-    """بيرجّع (معامل الجودة, نص مطبّع). الرسائل القصيرة جداً بتاخد أقل، والرسائل الكاملة أكتر."""
     text = re.sub(r"\s+", " ", _STRIP_RE.sub("", content or "")).strip().lower()
     n = len(text)
     if n == 0:
@@ -779,7 +756,6 @@ def message_quality(content: str, attachments: int) -> tuple[float, str]:
     return 1.25, text
 
 
-# ----- رسائل الترقية والمكافآت (بالأقواس المربعة) -----
 def fill_template(text: str, **vars_: str) -> str:
     out = convert_legacy_braces(text)
     for name, value in vars_.items():
@@ -789,7 +765,6 @@ def fill_template(text: str, **vars_: str) -> str:
 
 def build_announcement(cfg: dict, member: discord.Member, type_: str, level: int, xp: int, role_mentions: list[str],
                        silent: bool = False) -> tuple[Optional[str], Optional[discord.Embed], list[str]]:
-    """بيبني رسالة الإعلان. بيرجّع (النص, الإيمبد, الأجزاء). لو الرسالتين متوقفين مفيش إعلان."""
     guild = member.guild
     label = TYPE_LABEL[type_]
     who = member.display_name if silent else member.mention
@@ -878,7 +853,6 @@ async def panel_embed(guild: discord.Guild) -> discord.Embed:
 
 
 async def refresh_panel(panel_inter: Optional[discord.Interaction], guild: discord.Guild):
-    """تحديث رسالة اللوحة الأصلية (لو لسه صالحة)."""
     if panel_inter is None:
         return
     try:
@@ -888,12 +862,10 @@ async def refresh_panel(panel_inter: Optional[discord.Interaction], guild: disco
 
 
 async def panel_modal_done(interaction: discord.Interaction, title: str, desc: str):
-    """بعد مودال اتفتح من اللوحة: يحدّث اللوحة ويبعت تأكيد للأدمن."""
     await interaction.edit_original_response(embed=await panel_embed(interaction.guild))
     await interaction.followup.send(embed=ok_embed(title, desc), ephemeral=True)
 
 
-# ----- المودالات (بتتفتح من اللوحة مباشرة) -----
 class SystemShortcutsModal(SafeModal):
     def __init__(self, cfg: dict):
         super().__init__(title="⚡ تحديد اختصارات الأوامر")
@@ -1070,7 +1042,6 @@ class EventModal(SafeModal):
         await panel_modal_done(interaction, "🎉 بدأ الحدث", f"المضاعف `x{mult:g}` على **{SHORT_LABEL.get(etype, 'كل الأنواع 🌐')}** وينتهي <t:{end}:R>.")
 
 
-# ----- Pickers (رسائل مؤقتة فيها قوائم اختيار) -----
 class ChannelPickerView(SafeView):
     def __init__(self, setting_key: str, label: str, panel_inter: Optional[discord.Interaction]):
         super().__init__(timeout=120)
@@ -1158,8 +1129,6 @@ class MultiplierTypeSelectView(SafeView):
 
 
 class IgnoreSelectView(SafeView):
-    """اختيار عنصر مستبعد بالفعل بيشيله من الاستثناءات (Toggle)."""
-
     def __init__(self, panel_inter: Optional[discord.Interaction]):
         super().__init__(timeout=120)
         self.panel_inter = panel_inter
@@ -1209,7 +1178,6 @@ class RewardRemoveView(SafeView):
         await refresh_panel(self.panel_inter, interaction.guild)
 
 
-# ----- أزرار التشغيل والإيقاف (بتتعدل في نفس رسالة اللوحة) -----
 TOGGLES = [
     ("status", "النظام العام", "🌐", "تشغيل/إيقاف نظام المستويات بالكامل."),
     ("text_xp_enabled", "القسم النصي", "💬", "XP الرسائل. لو اتقفل بيختفي من البطاقة والتوب."),
@@ -1263,7 +1231,6 @@ class TogglesView(SafeView):
         await interaction.response.edit_message(embed=await panel_embed(interaction.guild), view=LevelsAdminPanelView(self.panel_inter))
 
 
-# ----- اللوحة الرئيسية -----
 class LevelsAdminPanelView(SafeView):
     def __init__(self, panel_inter: Optional[discord.Interaction] = None):
         super().__init__(timeout=None)
@@ -1362,8 +1329,14 @@ class LevelsAdminPanelView(SafeView):
 
 
 # ==============================================================================
-# 📋 قائمة المتصدرين (لكل نوع مستواه الخاص، والمفعّل فقط)
+# 📋 قائمة المتصدرين (مصلحة بالكامل)
 # ==============================================================================
+def xp_field(top_type: str, timeframe: str) -> str:
+    if timeframe == "all":
+        return f"{top_type}_xp"
+    return f"{timeframe}_{top_type}_xp"
+
+
 class TopTypeSelect(discord.ui.Select):
     def __init__(self, current: str, enabled: list[str]):
         options = [
@@ -1439,20 +1412,20 @@ class TopLeaderboardView(SafeView):
         self.enabled = enabled_types(cfg)
         if not self.enabled:
             return discord.Embed(title="📋 قائمة المتصدرين", description="⏸️ كل أقسام التفاعل متوقفة حالياً.", color=COLOR_DARK)
-        if self.top_type not in self.enabled:  # الأدمن قفل القسم ده وإحنا شغالين
+        if self.top_type not in self.enabled:
             self.top_type, self.page = self.enabled[0], 0
         field = xp_field(self.top_type, self.timeframe)
         extra = visible_filter(cfg)
         total, rows = await get_top_page(self.guild.id, field, extra, self.page * PER_PAGE, PER_PAGE)
         self.total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
-        if self.page >= self.total_pages:  # الصفحة بقت أكبر من المتاح (بيانات اتغيرت)
+        if self.page >= self.total_pages:
             self.page = self.total_pages - 1
             total, rows = await get_top_page(self.guild.id, field, extra, self.page * PER_PAGE, PER_PAGE)
 
         lines = []
         for i, doc in enumerate(rows, self.page * PER_PAGE + 1):
             levels = doc_levels(doc)
-            level = levels[self.top_type]  # ليفل نفس النوع المعروض
+            level = levels[self.top_type]
             role = last_reward_role(self.guild, cfg, levels, self.enabled, involving=self.top_type)
             lines.append(f"#{i}• <@{doc['user_id']}>: `{doc.get(field, 0)}` XP (ليفل {level})" + (f" ⟵ {role.mention}" if role else ""))
 
@@ -1525,11 +1498,9 @@ class ConfirmView(SafeView):
 
 
 # ==============================================================================
-# 🚀 تجميع الـ XP (Batching) — الأساس لدعم السيرفرات الكبيرة
+# 🚀 تجميع الـ XP
 # ==============================================================================
 class XpBatcher:
-    """بيجمّع كل الـ XP في الذاكرة ويتحفظ دفعات، بدل ما كل رسالة تعمل عملية داتابيز لوحدها."""
-
     def __init__(self):
         self.entries: dict[tuple[int, int], dict] = {}
 
@@ -1599,9 +1570,7 @@ class UltimateLevelsCog(commands.Cog):
         self.periodic_loop.cancel()
         await self.flush_xp()
 
-    # ---------- خوارزمية توزيع الـ XP ----------
     def fatigue_factor(self, key: tuple, soft_cap: float) -> float:
-        """حماية الإفراط: بعد ما العضو يجمع XP كتير في ساعة واحدة الـ XP بيقل تدريجياً (حتى 35%)."""
         now = time.monotonic()
         start, acc = self.fatigue.get(key, (now, 0.0))
         if now - start > FATIGUE_WINDOW:
@@ -1634,7 +1603,6 @@ class UltimateLevelsCog(commands.Cog):
             self.fatigue_add((member.guild.id, member.id, type_), amount)
         self.batcher.add(member, type_, amount, extra_inc)
 
-    # ---------- حفظ الدفعات وفحص الترقيات ----------
     @tasks.loop(seconds=XP_FLUSH_SECONDS)
     async def xp_flush_loop(self):
         try:
@@ -1658,13 +1626,12 @@ class UltimateLevelsCog(commands.Cog):
                 try:
                     docs = await run_db(apply_batch_sync, gid, [(uid, e["inc"]) for uid, e in items], int(time.time()))
                 except Exception:
-                    log.exception("فشل حفظ دفعة XP للسيرفر %s (هتتعاد المحاولة)", gid)
+                    log.exception("فشل حفظ دفعة XP للسيرفر %s", gid)
                     self.batcher.requeue(gid, items)
                     continue
                 try:
                     cfg = await SETTINGS.get(gid)
                 except Exception:
-                    log.exception("تعذر قراءة إعدادات السيرفر %s لفحص الترقيات", gid)
                     continue
                 for uid, e in items:
                     doc = docs.get(uid)
@@ -1686,9 +1653,7 @@ class UltimateLevelsCog(commands.Cog):
                 levels[t] = new_level
                 await self.on_level_up(member, t, new_level, xp_total, cfg, dict(levels), doc.get("notify_mode", "mention"))
 
-    # ---------- الرتب والترقية ----------
     async def sync_rewards(self, member: discord.Member, cfg: dict, levels: dict, remove: bool = False) -> tuple[list[discord.Role], list[discord.Role]]:
-        """بيمنح رتب المكافآت اللي العضو حقق شرطها (وبيسحب اللي مش مستحقها لو remove=True)."""
         enabled = enabled_types(cfg)
         me = member.guild.me
         should: dict[int, bool] = {}
@@ -1708,7 +1673,7 @@ class UltimateLevelsCog(commands.Cog):
                     await member.remove_roles(role, reason="Level System: reward no longer earned")
                     removed.append(role)
             except discord.HTTPException:
-                log.warning("فشل تعديل الرتبة %s للعضو %s", role_id, member.id, exc_info=True)
+                pass
         return given, removed
 
     async def on_level_up(self, member: discord.Member, type_: str, new_level: int, xp_total: int, cfg: dict, levels: dict, notify_mode: str = "mention"):
@@ -1719,16 +1684,14 @@ class UltimateLevelsCog(commands.Cog):
         content, embed, parts = build_announcement(cfg, member, type_, new_level, xp_total, role_mentions, silent=silent)
         no_ping = discord.AllowedMentions(users=[member] if not silent else [], roles=False, everyone=False)
 
-        # إعلان الترقية: بيتبعت بس لو القناة اتحددت من اللوحة وعضو مش مختار (خاص/بدون)
         chan = guild.get_channel(cfg["announcement_channel"]) if cfg["announcement_channel"] else None
         if parts and notify_mode in ("mention", "silent") and isinstance(chan, discord.abc.Messageable) \
                 and chan.permissions_for(guild.me).send_messages:
             try:
                 await chan.send(content=content, embed=embed, allowed_mentions=no_ping)
             except discord.HTTPException:
-                log.warning("فشل إرسال إعلان الترقية", exc_info=True)
+                pass
 
-        # السجل: بيتبعت بس لو قناة السجلات اتحددت
         logs = guild.get_channel(cfg["logs_channel"]) if cfg["logs_channel"] else None
         if isinstance(logs, discord.abc.Messageable) and logs.permissions_for(guild.me).send_messages:
             try:
@@ -1741,7 +1704,7 @@ class UltimateLevelsCog(commands.Cog):
                 log_embed.set_thumbnail(url=member.display_avatar.url)
                 await logs.send(embed=log_embed, allowed_mentions=discord.AllowedMentions.none())
             except discord.HTTPException:
-                log.warning("فشل إرسال سجل الترقية", exc_info=True)
+                pass
 
         if parts and (notify_mode == "dm" or (cfg["dm_notifications"] and notify_mode != "off")):
             try:
@@ -1749,7 +1712,6 @@ class UltimateLevelsCog(commands.Cog):
             except discord.HTTPException:
                 pass
 
-    # ---------- الرسائل ----------
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild or not isinstance(message.author, discord.Member):
@@ -1757,7 +1719,6 @@ class UltimateLevelsCog(commands.Cog):
         try:
             cfg = await SETTINGS.get(message.guild.id)
         except Exception:
-            log.exception("تعذر قراءة الإعدادات")
             return
         if not cfg["status"]:
             return
@@ -1770,7 +1731,7 @@ class UltimateLevelsCog(commands.Cog):
             return
 
         key = (message.guild.id, member.id)
-        self.batcher.add(member, None, 0, {"messages": 1})  # عدّاد الرسائل بيتحفظ مع الدفعة
+        self.batcher.add(member, None, 0, {"messages": 1})
 
         now = time.monotonic()
         if now - self.text_cd.get(key, 0) < cfg["text_cooldown"]:
@@ -1782,7 +1743,7 @@ class UltimateLevelsCog(commands.Cog):
         last = self.last_text.get(key)
         self.last_text[key] = (h, now)
         if normalized and last and last[0] == h and now - last[1] < DUPLICATE_WINDOW:
-            return  # نفس الرسالة بالظبط: مفيش XP (ضد السبام)
+            return
 
         amount = self.roll_xp(cfg, member, "text", quality, message.channel.id, getattr(message.channel, "category_id", None))
         self.grant(member, "text", amount, cfg)
@@ -1823,17 +1784,16 @@ class UltimateLevelsCog(commands.Cog):
             else:
                 await message.channel.send(embed=await self.build_rewards_embed(message.guild))
         except discord.HTTPException:
-            log.warning("فشل الرد على اختصار", exc_info=True)
+            pass
         return True
 
-    # ---------- الرياكشن ----------
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         member = payload.member
         if not payload.guild_id or member is None or member.bot:
             return
         if getattr(payload, "message_author_id", None) == payload.user_id:
-            return  # ممنوع تاخد XP من الرياكشن على رسالتك
+            return
         guild = self.bot.get_guild(payload.guild_id)
         if guild is None:
             return
@@ -1855,7 +1815,6 @@ class UltimateLevelsCog(commands.Cog):
         amount = self.roll_xp(cfg, member, "reaction", 1.0, payload.channel_id, getattr(channel, "category_id", None))
         self.grant(member, "reaction", amount, cfg)
 
-    # ---------- خروج/دخول الأعضاء (عشان التوب يفضل نضيف) ----------
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
         if not member.bot:
@@ -1863,7 +1822,7 @@ class UltimateLevelsCog(commands.Cog):
                 await run_db(mark_left_sync, member.guild.id, member.id, True)
                 _TOP_CACHE.clear()
             except Exception:
-                log.warning("تعذر تعليم العضو كمغادر", exc_info=True)
+                pass
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
@@ -1871,9 +1830,8 @@ class UltimateLevelsCog(commands.Cog):
             try:
                 await run_db(mark_left_sync, member.guild.id, member.id, False)
             except Exception:
-                log.warning("تعذر إرجاع العضو للترتيب", exc_info=True)
+                pass
 
-    # ---------- الفويس ----------
     @tasks.loop(minutes=1)
     async def voice_tracker(self):
         for guild in list(self.bot.guilds):
@@ -1908,7 +1866,6 @@ class UltimateLevelsCog(commands.Cog):
     async def before_voice_tracker(self):
         await self.bot.wait_until_ready()
 
-    # ---------- التصفير الدوري والتنظيف ----------
     @tasks.loop(minutes=1)
     async def periodic_loop(self):
         try:
@@ -1931,12 +1888,12 @@ class UltimateLevelsCog(commands.Cog):
     async def _check_resets(self):
         keys = {p: period_key(p) for p in PERIODS}
         meta = await run_db(meta_get_sync)
-        if not meta:  # أول تشغيل: نسجل الفترة الحالية من غير تصفير
+        if not meta:
             await run_db(meta_set_sync, keys)
             return
         changed = [p for p in PERIODS if meta.get(p) != keys[p]]
         for p in changed:
-            await self.flush_xp()  # نحفظ اللي في الذاكرة قبل التصفير
+            await self.flush_xp()
             await self._award_periodic(p)
             await run_db(reset_period_sync, p)
             _TOP_CACHE.clear()
@@ -1975,13 +1932,12 @@ class UltimateLevelsCog(commands.Cog):
             except Exception:
                 log.exception("فشل منح مكافأة التفاعل الدوري في %s", guild.id)
 
-    # ---------- البطاقات ----------
     async def build_level_embed(self, guild: discord.Guild, target: discord.Member) -> discord.Embed:
         cfg = await SETTINGS.get(guild.id)
         enabled = enabled_types(cfg)
         if not enabled:
             return discord.Embed(title="⏸️ النظام متوقف", description="كل أقسام التفاعل متوقفة حالياً.", color=COLOR_DARK)
-        await self.flush_xp()  # عشان البطاقة تعرض آخر XP (حتى اللي لسه في الذاكرة)
+        await self.flush_xp()
         doc = await run_db(get_user_sync, guild.id, target.id) or {}
         extra = visible_filter(cfg)
 
@@ -2042,14 +1998,6 @@ class UltimateLevelsCog(commands.Cog):
         embed.set_footer(text=f"{guild.name} ✦ Rewards System")
         return embed
 
-    async def _ensure_active(self, interaction: discord.Interaction) -> Optional[dict]:
-        cfg = await SETTINGS.get(interaction.guild.id)
-        if not enabled_types(cfg):
-            await respond(interaction, embed=discord.Embed(title="⏸️ النظام متوقف", description="كل أقسام التفاعل متوقفة حالياً.", color=COLOR_DARK), ephemeral=True)
-            return None
-        return cfg
-
-    # ---------- أوامر الأعضاء ----------
     @app_commands.command(name="top", description="عرض المتصدرين في السيرفر")
     @app_commands.guild_only()
     async def top(self, interaction: discord.Interaction):
@@ -2076,7 +2024,7 @@ class UltimateLevelsCog(commands.Cog):
         await interaction.response.defer()
         await interaction.followup.send(embed=await self.build_level_embed(interaction.guild, target))
 
-    @app_commands.command(name="level_notify", description="اختار طريقة إشعارك لما تترقى (منشن / من غير منشن / خاص / بدون)")
+    @app_commands.command(name="level_notify", description="اختار طريقة إشعارك لما تترقى")
     @app_commands.guild_only()
     @app_commands.describe(mode="طريقة الإشعار")
     @app_commands.choices(mode=[app_commands.Choice(name=v, value=k) for k, v in NOTIFY_MODES.items()])
@@ -2085,13 +2033,11 @@ class UltimateLevelsCog(commands.Cog):
         await run_db(set_user_fields_sync, interaction.guild.id, interaction.user.id, {"notify_mode": mode.value})
         await interaction.followup.send(embed=ok_embed("✅ تم", f"إشعارات الترقية بتاعتك دلوقتي: **{NOTIFY_MODES[mode.value]}**"), ephemeral=True)
 
-    # ---------- أوامر الإدارة (تعديل يدوي) ----------
     async def _manual_apply(self, interaction: discord.Interaction, member: discord.Member, sets_by_type: dict[str, int],
                             remove_roles: bool, action: str):
-        """sets_by_type = {نوع: XP جديد}. بيعدّل النقاط والليفل بالظبط ويزامن الرتب ويسجل في اللوج."""
         await interaction.response.defer(ephemeral=True)
         gid = interaction.guild.id
-        await self.flush_xp()  # نحفظ اللي في الذاكرة الأول عشان ما يتخبطش مع التعديل
+        await self.flush_xp()
         old = await run_db(get_user_sync, gid, member.id) or {}
         sets: dict[str, Any] = {}
         for t, xp in sets_by_type.items():
@@ -2128,7 +2074,7 @@ class UltimateLevelsCog(commands.Cog):
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.describe(member="العضو", section="القسم", value="قيمة الـ XP الجديدة", remove_roles="سحب رتب المكافآت اللي مبقاش يستحقها؟")
+    @app_commands.describe(member="العضو", section="القسم", value="قيمة الـ XP الجديدة", remove_roles="سحب رتب المكافآت؟")
     @app_commands.choices(section=TYPE_CHOICES)
     async def set_xp(self, interaction: discord.Interaction, member: discord.Member, section: app_commands.Choice[str],
                      value: app_commands.Range[int, 0, MAX_XP], remove_roles: bool = False):
@@ -2141,7 +2087,7 @@ class UltimateLevelsCog(commands.Cog):
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.describe(member="العضو", section="القسم", level="الليفل الجديد", remove_roles="سحب رتب المكافآت اللي مبقاش يستحقها؟")
+    @app_commands.describe(member="العضو", section="القسم", level="الليفل الجديد", remove_roles="سحب رتب المكافآت؟")
     @app_commands.choices(section=TYPE_CHOICES)
     async def set_level(self, interaction: discord.Interaction, member: discord.Member, section: app_commands.Choice[str],
                         level: app_commands.Range[int, 0, MAX_LEVEL], remove_roles: bool = False):
@@ -2150,11 +2096,11 @@ class UltimateLevelsCog(commands.Cog):
             return
         await self._manual_apply(interaction, member, {section.value: cumulative_xp(level)}, remove_roles, "ضبط ليفل")
 
-    @app_commands.command(name="add_xp", description="[الإدارة] إضافة أو خصم نقاط XP من عضو (اكتب رقم سالب للخصم)")
+    @app_commands.command(name="add_xp", description="[الإدارة] إضافة أو خصم نقاط XP من عضو")
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.describe(member="العضو", section="القسم", amount="عدد النقاط (سالب للخصم)", remove_roles="سحب رتب المكافآت اللي مبقاش يستحقها؟")
+    @app_commands.describe(member="العضو", section="القسم", amount="عدد النقاط (سالب للخصم)", remove_roles="سحب رتب المكافآت؟")
     @app_commands.choices(section=TYPE_CHOICES)
     async def add_xp(self, interaction: discord.Interaction, member: discord.Member, section: app_commands.Choice[str],
                      amount: app_commands.Range[int, -MAX_XP, MAX_XP], remove_roles: bool = False):
@@ -2166,18 +2112,18 @@ class UltimateLevelsCog(commands.Cog):
         current = int(doc.get(f"{section.value}_xp", 0))
         await self._manual_apply(interaction, member, {section.value: current + amount}, remove_roles, "إضافة/خصم XP")
 
-    @app_commands.command(name="reset_xp", description="[الإدارة] تصفير مستويات عضو (قسم معين أو كل الأقسام)")
+    @app_commands.command(name="reset_xp", description="[الإدارة] تصفير مستويات عضو")
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.describe(member="العضو", section="القسم (فاضي = كل الأقسام)", remove_roles="سحب رتب المكافآت اللي مبقاش يستحقها؟")
+    @app_commands.describe(member="العضو", section="القسم (فاضي = كل الأقسام)", remove_roles="سحب رتب المكافآت؟")
     @app_commands.choices(section=TYPE_CHOICES)
     async def reset_xp(self, interaction: discord.Interaction, member: discord.Member,
                        section: Optional[app_commands.Choice[str]] = None, remove_roles: bool = True):
         types = [section.value] if section else list(TYPES)
         await self._manual_apply(interaction, member, {t: 0 for t in types}, remove_roles, "تصفير")
 
-    @app_commands.command(name="reset_all_xp", description="[الإدارة] تصفير مستويات كل أعضاء السيرفر (خطير! بيطلب تأكيد)")
+    @app_commands.command(name="reset_all_xp", description="[الإدارة] تصفير مستويات كل أعضاء السيرفر")
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
@@ -2191,7 +2137,7 @@ class UltimateLevelsCog(commands.Cog):
             await self.flush_xp()
             count = await run_db(reset_all_sync, i.guild.id, types)
             _TOP_CACHE.clear()
-            await i.followup.send(embed=ok_embed("🧹 تم التصفير", f"اتصفّر **{label}** لـ `{count}` عضو.\n_رتب المكافآت مش بتتسحب أوتوماتيك._"), ephemeral=True)
+            await i.followup.send(embed=ok_embed("🧹 تم التصفير", f"اتصفّر **{label}** لـ `{count}` عضو."), ephemeral=True)
 
         embed = discord.Embed(title="⚠️ تأكيد التصفير الشامل",
                               description=f"هتصفّر **{label}** لكل أعضاء السيرفر وده **مش ممكن يترجع**. متأكد؟ (30 ثانية)", color=COLOR_RED)
